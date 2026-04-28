@@ -54,6 +54,13 @@ export function UserBillingPage() {
   const qrCanvasRef = useRef<HTMLCanvasElement>(null)
   const [qrError, setQrError] = useState('')
 
+  // 当 settings 加载完毕后，将支付方式重置为第一个可用方式
+  useEffect(() => {
+    if (!settings.wechatPayEnabled && settings.alipayEnabled) {
+      setPayMethod('alipay')
+    }
+  }, [settings.wechatPayEnabled, settings.alipayEnabled])
+
   useEffect(() => {
     if (!showPayFrame || !payUrl || !qrCanvasRef.current) return
     setQrError('')
@@ -294,20 +301,24 @@ export function UserBillingPage() {
 
                 <div className="mt-8 flex flex-col items-center gap-6">
                   <div className="flex gap-4">
-                    <Button
-                      variant={payMethod === 'wechat' ? 'default' : 'outline'}
-                      className={cx("h-12 w-32 border-2", payMethod === 'wechat' ? 'border-green-600 bg-green-50 text-green-700 hover:bg-green-100 hover:text-green-800' : '')}
-                      onClick={() => setPayMethod('wechat')}
-                    >
-                      微信支付
-                    </Button>
-                    <Button
-                      variant={payMethod === 'alipay' ? 'default' : 'outline'}
-                      className={cx("h-12 w-32 border-2", payMethod === 'alipay' ? 'border-blue-600 bg-blue-50 text-blue-700 hover:bg-blue-100 hover:text-blue-800' : '')}
-                      onClick={() => setPayMethod('alipay')}
-                    >
-                      支付宝
-                    </Button>
+                    {settings.wechatPayEnabled && (
+                      <Button
+                        variant={payMethod === 'wechat' ? 'default' : 'outline'}
+                        className={cx("h-12 w-32 border-2", payMethod === 'wechat' ? 'border-green-600 bg-green-50 text-green-700 hover:bg-green-100 hover:text-green-800' : '')}
+                        onClick={() => setPayMethod('wechat')}
+                      >
+                        微信支付
+                      </Button>
+                    )}
+                    {settings.alipayEnabled && (
+                      <Button
+                        variant={payMethod === 'alipay' ? 'default' : 'outline'}
+                        className={cx("h-12 w-32 border-2", payMethod === 'alipay' ? 'border-blue-600 bg-blue-50 text-blue-700 hover:bg-blue-100 hover:text-blue-800' : '')}
+                        onClick={() => setPayMethod('alipay')}
+                      >
+                        支付宝
+                      </Button>
+                    )}
                   </div>
 
                   <Button size="lg" className="w-64 rounded-full text-lg" onClick={handlePay} disabled={isPaying || !selectedAmount}>

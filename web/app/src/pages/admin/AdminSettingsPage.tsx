@@ -327,6 +327,25 @@ export function AdminSettingsPage() {
                       </FieldRow>
                     </>
                   ) : null}
+                  <FieldRow label="">
+                    <Separator className="my-2" />
+                  </FieldRow>
+                  <FieldRow label="开启微信支付">
+                    <ToggleField
+                      checked={form.wechat_pay_enabled !== 'false'}
+                      onChange={(v) => set('wechat_pay_enabled', v ? 'true' : 'false')}
+                    >
+                      <Tip>关闭后用户充值页将不显示微信支付按钮</Tip>
+                    </ToggleField>
+                  </FieldRow>
+                  <FieldRow label="开启支付宝">
+                    <ToggleField
+                      checked={form.alipay_enabled !== 'false'}
+                      onChange={(v) => set('alipay_enabled', v ? 'true' : 'false')}
+                    >
+                      <Tip>关闭后用户充值页将不显示支付宝按钮</Tip>
+                    </ToggleField>
+                  </FieldRow>
                 </div>
               </TabsContent>
 

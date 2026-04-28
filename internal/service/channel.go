@@ -394,8 +394,9 @@ func listChannelsByModel(ctx context.Context, modelName string) ([]model.Channel
 		}
 	}
 
+	// 同时匹配 model 字段和 display_name 字段，使 display_name 可作为路由别名使用。
 	var channels []model.Channel
-	err = db.Engine.Where("model = ? AND is_active = true", modelName).
+	err = db.Engine.Where("(model = ? OR (display_name != '' AND display_name = ?)) AND is_active = true", modelName, modelName).
 		OrderBy("priority DESC, id ASC").Find(&channels)
 	if err != nil {
 		return nil, err

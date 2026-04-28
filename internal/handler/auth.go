@@ -277,7 +277,7 @@ func (h *AuthHandler) GetTransactions(c *gin.Context) {
 func (h *AuthHandler) ListModels(c *gin.Context) {
 	var channels []model.Channel
 	if err := db.Engine.Where("is_active = true").
-		Cols("id", "name", "model", "type", "protocol", "billing_type", "billing_config", "icon_url", "description").
+		Cols("id", "name", "model", "display_name", "type", "protocol", "billing_type", "billing_config", "icon_url", "description").
 		Find(&channels); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -302,14 +302,21 @@ func (h *AuthHandler) ListModels(c *gin.Context) {
 		Description  string `json:"description"`
 	}
 
-	// 按路由键（ch.Model）去重，同一路由键的多个渠道只展示第一个作为代表
+	// 按展示键去重：display_name 非空时以 display_name 为分组键，否则以 model 为分组键。
+	// 同一分组键的多个渠道只展示第一个作为代表；卡片标题使用展示键（即 display_name 或 model）。
 	seen := make(map[string]bool)
 	result := make([]channelInfo, 0, len(channels))
 	for _, ch := range channels {
-		if seen[ch.Model] {
+		groupKey := ch.Model
+		if ch.DisplayName != "" {
+			groupKey = ch.DisplayName
+		}
+		if seen[groupKey] {
 			continue
 		}
-		seen[ch.Model] = true
+		seen[groupKey] = true
+
+		displayName := groupKey // 展示名 = display_name（若设置），否则 = model
 
 		defaultPrice := buildPriceDisplay(ch.BillingType, ch.BillingConfig)
 		groupPrice := ""
@@ -320,10 +327,15 @@ func (h *AuthHandler) ListModels(c *gin.Context) {
 				groupPrice = gp
 			}
 		}
+		// routing_model：display_name 非空时用 display_name（路由层也能按其查找），否则用 model
+		routingModel := ch.Model
+		if ch.DisplayName != "" {
+			routingModel = ch.DisplayName
+		}
 		result = append(result, channelInfo{
 			ID:           ch.ID,
-			Name:         ch.Name,
-			RoutingModel: ch.Model,
+			Name:         displayName,
+			RoutingModel: routingModel,
 			Type:         ch.Type,
 			Protocol:     ch.Protocol,
 			BillingType:  ch.BillingType,

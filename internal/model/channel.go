@@ -80,8 +80,9 @@ type Channel struct {
 	Priority int  `xorm:"notnull default(0) 'priority'" json:"priority"` // 优先级，越大越优先（同模型多渠道时）
 	IsActive bool `xorm:"notnull default(true) 'is_active'" json:"is_active"`
 	// 展示字段
-	IconURL     string    `xorm:"notnull default('') 'icon_url'" json:"icon_url"`    // 模型图标 URL
-	Description string    `xorm:"text default('') 'description'" json:"description"` // 模型描述
+	DisplayName string    `xorm:"notnull default('') 'display_name'" json:"display_name"` // 用户端展示名称（自定义模型名），留空时以 Model 字段作为展示名和分组依据
+	IconURL     string    `xorm:"notnull default('') 'icon_url'" json:"icon_url"`         // 模型图标 URL
+	Description string    `xorm:"text default('') 'description'" json:"description"`      // 模型描述
 	CreatedAt   time.Time `xorm:"created 'created_at'" json:"created_at"`
 	UpdatedAt   time.Time `xorm:"updated 'updated_at'" json:"updated_at"`
 }

@@ -15,6 +15,8 @@ export type SiteSettings = {
   plans: Plan[]
   epayEnabled: boolean
   payApplyEnabled: boolean
+  wechatPayEnabled: boolean
+  alipayEnabled: boolean
   allowCustom: boolean
   noticeTitle: string
   noticeContent: string
@@ -32,6 +34,8 @@ const defaultSettings: SiteSettings = {
   plans: [],
   epayEnabled: false,
   payApplyEnabled: false,
+  wechatPayEnabled: true,
+  alipayEnabled: true,
   allowCustom: false,
   noticeTitle: '',
   noticeContent: '',
@@ -64,6 +68,8 @@ export function useSiteSettings() {
           })(),
           epayEnabled: record.epay_enabled === 'true',
           payApplyEnabled: record.pay_apply_enabled === 'true',
+          wechatPayEnabled: record.wechat_pay_enabled !== 'false',
+          alipayEnabled: record.alipay_enabled !== 'false',
           allowCustom: record.recharge_allow_custom !== 'false',
           noticeTitle: record.notice_title || '',
           noticeContent: record.notice_content || '',

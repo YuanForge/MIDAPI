@@ -102,6 +102,7 @@ type ChannelForm = {
   priority: string
   icon_url: string
   description: string
+  display_name: string
   is_active: boolean
 }
 
@@ -228,6 +229,7 @@ const emptyForm: ChannelForm = {
   priority: '0',
   icon_url: '',
   description: '',
+  display_name: '',
   is_active: true,
 }
 
@@ -607,6 +609,7 @@ function buildFormFromChannel(row: AdminChannel, isCopy = false): ChannelForm {
     priority: String(row.priority ?? 0),
     icon_url: row.icon_url ?? '',
     description: row.description ?? '',
+    display_name: row.display_name ?? '',
     is_active: row.is_active ?? true,
   }
 }
@@ -752,6 +755,7 @@ export function AdminChannelsPage() {
         priority: Number(form.priority || '0'),
         icon_url: form.icon_url.trim(),
         description: form.description.trim(),
+        display_name: form.display_name.trim(),
         is_active: form.is_active,
       }
       if (form.id) {
@@ -983,6 +987,10 @@ export function AdminChannelsPage() {
                       <img src={form.icon_url} alt="渠道图标预览" className="max-h-full max-w-full rounded-md object-contain" />
                     </div>
                   ) : null}
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">自定义展示名</label>
+                  <Input value={form.display_name} onChange={(event) => setForm((current) => ({ ...current, display_name: event.target.value }))} placeholder="留空则用户端显示标准模型名，相同展示名的渠道归为同一模型" />
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-medium">描述</label>
