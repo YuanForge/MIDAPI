@@ -183,13 +183,15 @@ func handleResult(msg *nats.Msg) {
 					"stable_retry": true,
 				})
 
-				// 更新 DB 中的渠道和费用
-				db.Engine.Where("id = ?", res.TaskID).Cols("channel_id", "credits_charged", "corr_id", "status").
+				// 更新 DB 中的渠道、费用和剩余重试列表
+				// remaining 可能为空，使用 Cols() 强制写入空数组，避免后续异步失败时再次重试已尝试的渠道
+				db.Engine.Where("id = ?", res.TaskID).Cols("channel_id", "credits_charged", "corr_id", "status", "retry_channel_ids").
 					Update(&model.Task{
-						ChannelID:      nextChannelID,
-						CreditsCharged: newCost,
-						CorrID:         newCorrID,
-						Status:         "processing",
+						ChannelID:       nextChannelID,
+						CreditsCharged:  newCost,
+						CorrID:          newCorrID,
+						Status:          "processing",
+						RetryChannelIDs: model.Int64Array(remaining),
 					})
 
 				// 分配号池 Key

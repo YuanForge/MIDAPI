@@ -1,26 +1,64 @@
 package model
 
-import "time"
+import (
+	"database/sql/driver"
+	"encoding/json"
+	"fmt"
+	"time"
+)
+
+// Int64Array 是 jsonb 列存储 []int64 的辅助类型，
+// 用于 Task.RetryChannelIDs 等少量场景。
+type Int64Array []int64
+
+func (a Int64Array) Value() (driver.Value, error) {
+	if len(a) == 0 {
+		return "[]", nil
+	}
+	b, err := json.Marshal([]int64(a))
+	return string(b), err
+}
+
+func (a *Int64Array) Scan(src interface{}) error {
+	var data []byte
+	switch v := src.(type) {
+	case []byte:
+		data = v
+	case string:
+		data = []byte(v)
+	case nil:
+		*a = nil
+		return nil
+	default:
+		return fmt.Errorf("unsupported type: %T", src)
+	}
+	if len(data) == 0 {
+		*a = nil
+		return nil
+	}
+	return json.Unmarshal(data, (*[]int64)(a))
+}
 
 // Task 异步任务记录（图片/视频/音频生成任务）。
 type Task struct {
-	ID               int64     `xorm:"pk autoincr 'id'" json:"id"`
-	UserID           int64     `xorm:"notnull index 'user_id'" json:"user_id"`
-	ChannelID        int64     `xorm:"notnull 'channel_id'" json:"channel_id"`
-	APIKeyID         int64     `xorm:"notnull 'api_key_id'" json:"api_key_id"`
-	Type             string    `xorm:"notnull 'type'" json:"type"` // image / video / audio
-	Status           string    `xorm:"notnull default('pending') 'status'" json:"status"`
-	Progress         int       `xorm:"notnull default(0) 'progress'" json:"progress"`
-	Request          JSON      `xorm:"jsonb 'request'" json:"request"`
-	UpstreamRequest  JSON      `xorm:"jsonb 'upstream_request'" json:"upstream_request,omitempty"`
-	UpstreamResponse JSON      `xorm:"jsonb 'upstream_response'" json:"upstream_response,omitempty"`
-	Result           JSON      `xorm:"jsonb 'result'" json:"result"`                                     // 经 response_script / query_script 映射后的标准格式
-	UpstreamTaskID   string    `xorm:"default('') 'upstream_task_id'" json:"upstream_task_id,omitempty"` // 异步渠道：第三方返回的任务 ID，用于轮询
-	ErrorMsg         string    `xorm:"text 'error_msg'" json:"error_msg,omitempty"`
-	CreditsCharged   int64     `xorm:"notnull default(0) 'credits_charged'" json:"credits_charged"`
-	CorrID           string    `xorm:"default('') 'corr_id'" json:"corr_id,omitempty"` // 关联计费流水的唯一 ID
-	CreatedAt        time.Time `xorm:"created 'created_at'" json:"created_at"`
-	UpdatedAt        time.Time `xorm:"updated 'updated_at'" json:"updated_at"`
+	ID               int64      `xorm:"pk autoincr 'id'" json:"id"`
+	UserID           int64      `xorm:"notnull index 'user_id'" json:"user_id"`
+	ChannelID        int64      `xorm:"notnull 'channel_id'" json:"channel_id"`
+	APIKeyID         int64      `xorm:"notnull 'api_key_id'" json:"api_key_id"`
+	Type             string     `xorm:"notnull 'type'" json:"type"` // image / video / audio
+	Status           string     `xorm:"notnull default('pending') 'status'" json:"status"`
+	Progress         int        `xorm:"notnull default(0) 'progress'" json:"progress"`
+	Request          JSON       `xorm:"jsonb 'request'" json:"request"`
+	UpstreamRequest  JSON       `xorm:"jsonb 'upstream_request'" json:"upstream_request,omitempty"`
+	UpstreamResponse JSON       `xorm:"jsonb 'upstream_response'" json:"upstream_response,omitempty"`
+	Result           JSON       `xorm:"jsonb 'result'" json:"result"`                                     // 经 response_script / query_script 映射后的标准格式
+	UpstreamTaskID   string     `xorm:"default('') 'upstream_task_id'" json:"upstream_task_id,omitempty"` // 异步渠道：第三方返回的任务 ID，用于轮询
+	ErrorMsg         string     `xorm:"text 'error_msg'" json:"error_msg,omitempty"`
+	CreditsCharged   int64      `xorm:"notnull default(0) 'credits_charged'" json:"credits_charged"`
+	CorrID           string     `xorm:"default('') 'corr_id'" json:"corr_id,omitempty"`                 // 关联计费流水的唯一 ID
+	RetryChannelIDs  Int64Array `xorm:"jsonb 'retry_channel_ids'" json:"retry_channel_ids,omitempty"` // 稳定密钥：剩余待试渠道 ID（按价格升序），异步路径上由 poller 读取以触发重试
+	CreatedAt        time.Time  `xorm:"created 'created_at'" json:"created_at"`
+	UpdatedAt        time.Time  `xorm:"updated 'updated_at'" json:"updated_at"`
 }
 
 func (*Task) TableName() string { return "tasks" }

@@ -14,6 +14,7 @@ import (
 	"fanapi/internal/cache"
 	"fanapi/internal/db"
 	"fanapi/internal/model"
+	"fanapi/internal/mq"
 	"fanapi/internal/script"
 	"fanapi/internal/service"
 )
@@ -92,8 +93,7 @@ func pollPendingTasks(ctx context.Context) {
 
 		if time.Since(task.CreatedAt) > maxAge {
 			cache.Client.Del(ctx, lockKey)
-			failTaskDB(ctx, task.ID, task.UserID, task.ChannelID, task.APIKeyID, task.CorrID, task.CreditsCharged,
-				"task timed out after "+maxAge.String())
+			publishFailedResult(ctx, task, "task timed out after "+maxAge.String())
 			continue
 		}
 
@@ -240,7 +240,7 @@ func pollOneTask(ctx context.Context, task *model.Task, ch *model.Channel) {
 		if isErr {
 			db.Engine.Where("id = ?", task.ID).Cols("upstream_response").
 				Update(&model.Task{UpstreamResponse: upstreamResp})
-			failTaskDB(ctx, task.ID, task.UserID, task.ChannelID, task.APIKeyID, task.CorrID, task.CreditsCharged, detectedErr)
+			publishFailedResult(ctx, task, detectedErr)
 			return
 		}
 	}
@@ -265,14 +265,51 @@ func pollOneTask(ctx context.Context, task *model.Task, ch *model.Channel) {
 		db.Engine.Where("id = ?", task.ID).Cols("upstream_response").
 			Update(&model.Task{UpstreamResponse: upstreamResp})
 		failMsg := fmt.Sprintf("%v", mappedResp["msg"])
-		failTaskDB(ctx, task.ID, task.UserID, task.ChannelID, task.APIKeyID, task.CorrID, task.CreditsCharged,
-			"upstream failed: "+failMsg)
+		publishFailedResult(ctx, task, "upstream failed: "+failMsg)
 
 	default: // 仍在处理中
 		prog := toIntField(mappedResp, "progress")
 		db.Engine.Where("id = ?", task.ID).Cols("upstream_response", "progress").
 			Update(&model.Task{UpstreamResponse: upstreamResp, Progress: prog})
 		log.Printf("[poller] task %d still processing (status=%d, progress=%d)", task.ID, statusVal, prog)
+	}
+}
+
+// publishFailedResult 合成一条 OutcomeFailed 的 WorkerResult 发布到 RESULTS 流，
+// 由 result-proc 统一处理：若 task.RetryChannelIDs 非空则换渠道重试，否则退款失败。
+//
+// 异步任务在 worker 返回 OutcomeAsync 后，原始 NATS 任务消息已被 ACK；
+// 此时若 poller 检测到上游业务失败，需要走结果通道触发统一重试逻辑，
+// 而不是直接 failTaskDB（会跳过稳定密钥的换渠道重试）。
+func publishFailedResult(ctx context.Context, task *model.Task, errMsg string) {
+	res := model.WorkerResult{
+		TaskID:          task.ID,
+		TaskType:        task.Type,
+		UserID:          task.UserID,
+		APIKeyID:        task.APIKeyID,
+		CorrID:          task.CorrID,
+		CreditsCharged:  task.CreditsCharged,
+		ChannelID:       task.ChannelID,
+		Outcome:         model.OutcomeFailed,
+		ErrorMsg:        errMsg,
+		Payload:         map[string]interface{}(task.Request),
+		RetryChannelIDs: []int64(task.RetryChannelIDs),
+	}
+	// 从原扣费流水里取 pool_key_id，使后续退款流水的 pool_key_id 与扣费流水保持一致
+	var chargeTx model.BillingTransaction
+	if found, _ := db.Engine.Where("corr_id = ? AND type = ?", task.CorrID, "charge").Get(&chargeTx); found {
+		res.PoolKeyID = chargeTx.PoolKeyID
+	}
+	data, err := json.Marshal(res)
+	if err != nil {
+		log.Printf("[poller] task %d: marshal synthetic failed result error: %v, falling back to direct fail", task.ID, err)
+		failTaskDB(ctx, task.ID, task.UserID, task.ChannelID, task.APIKeyID, task.CorrID, task.CreditsCharged, errMsg)
+		return
+	}
+	subject := fmt.Sprintf("result.%d", task.ID)
+	if pubErr := mq.PublishResult(subject, data); pubErr != nil {
+		log.Printf("[poller] task %d: publish synthetic failed result error: %v, falling back to direct fail", task.ID, pubErr)
+		failTaskDB(ctx, task.ID, task.UserID, task.ChannelID, task.APIKeyID, task.CorrID, task.CreditsCharged, errMsg)
 	}
 }
 

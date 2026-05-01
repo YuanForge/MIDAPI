@@ -195,16 +195,26 @@ func createTask(c *gin.Context, taskType string, reqData map[string]interface{})
 	for k, v := range reqData {
 		reqJSON[k] = v
 	}
+	// 稳定密钥：将剩余待试渠道 ID（跳过当前渠道）按价格升序存入 RetryChannelIDs，
+	// 同步路径由 result-proc 直接消费 WorkerResult 中的字段；异步路径由 poller 从 task 表读取。
+	var retryChannelIDs []int64
+	for i := range stableChannels {
+		if stableChannels[i].ID != channelID {
+			retryChannelIDs = append(retryChannelIDs, stableChannels[i].ID)
+		}
+	}
+
 	corrID := uuid.New().String()
 	task := &model.Task{
-		UserID:         userID,
-		ChannelID:      channelID,
-		APIKeyID:       apiKeyIDVal,
-		Type:           taskType,
-		Status:         "pending",
-		Request:        reqJSON,
-		CreditsCharged: cost,
-		CorrID:         corrID,
+		UserID:          userID,
+		ChannelID:       channelID,
+		APIKeyID:        apiKeyIDVal,
+		Type:            taskType,
+		Status:          "pending",
+		Request:         reqJSON,
+		CreditsCharged:  cost,
+		CorrID:          corrID,
+		RetryChannelIDs: model.Int64Array(retryChannelIDs),
 	}
 	if _, err := db.Engine.Insert(task); err != nil {
 		_ = billing.Refund(c.Request.Context(), userID, cost)
@@ -217,16 +227,6 @@ func createTask(c *gin.Context, taskType string, reqData map[string]interface{})
 		"task_id": task.ID,
 		"type":    taskType,
 	})
-
-	// 发布到 NATS；消息携带渠道完整配置，worker 只需 NATS 连接
-	// 稳定密钥：将剩余待试渠道 ID（跳过当前渠道）存入 RetryChannelIDs，
-	// 结果处理器在失败时按顺序换下一个渠道重试。
-	var retryChannelIDs []int64
-	for i := range stableChannels {
-		if stableChannels[i].ID != channelID {
-			retryChannelIDs = append(retryChannelIDs, stableChannels[i].ID)
-		}
-	}
 
 	natSubject := fmt.Sprintf("task.%s.%d", taskType, channelID)
 	job := &model.TaskJob{
