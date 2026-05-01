@@ -65,46 +65,57 @@ func RunMapResponse(scriptSrc string, input map[string]interface{}) (map[string]
 // RunCheckError 执行 JS 脚本中的 checkError(response) 函数，检测上游错误。
 //
 // 脚本约定：
-//   - 返回 null / undefined / false / "" → 无错误
-//   - 返回非空字符串 → 错误消息（平台将据此 failTask 并退款）
-//   - 返回 true → 通用错误（使用默认消息）
+//   - 返回 null / undefined / false / ""           → 无错误
+//   - 返回非空字符串                                → 普通错误消息（平台据此 failTask/退款，仅触发重试）
+//   - 返回 true                                     → 通用错误（使用默认消息）
+//   - 返回 {msg: string, fatal: bool}              → fatal=true 时表示该渠道永久故障（如余额不足），平台会停用渠道
 //
 // 示例（ChatFire 格式）：
 //
 //	function checkError(resp) {
+//	    if (resp.error?.code === "insufficient_quota") {
+//	        return { msg: resp.error.message, fatal: true };
+//	    }
 //	    if (resp.error) return resp.error.code + ": " + resp.error.message;
 //	    return null;
 //	}
-func RunCheckError(scriptSrc string, response map[string]interface{}) (string, error) {
+func RunCheckError(scriptSrc string, response map[string]interface{}) (string, bool, error) {
 	prog, err := getProgram(scriptSrc)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	vm := goja.New()
 	if _, err := vm.RunProgram(prog); err != nil {
-		return "", fmt.Errorf("script run error: %w", err)
+		return "", false, fmt.Errorf("script run error: %w", err)
 	}
 	fn, ok := goja.AssertFunction(vm.Get("checkError"))
 	if !ok {
-		return "", fmt.Errorf("function \"checkError\" not found in error_script")
+		return "", false, fmt.Errorf("function \"checkError\" not found in error_script")
 	}
 	res, err := fn(goja.Undefined(), vm.ToValue(response))
 	if err != nil {
-		return "", fmt.Errorf("checkError execution error: %w", err)
+		return "", false, fmt.Errorf("checkError execution error: %w", err)
 	}
 	if goja.IsNull(res) || goja.IsUndefined(res) {
-		return "", nil
+		return "", false, nil
 	}
 	switch v := res.Export().(type) {
 	case bool:
 		if v {
-			return "upstream returned error", nil
+			return "upstream returned error", false, nil
 		}
-		return "", nil
+		return "", false, nil
 	case string:
-		return v, nil
+		return v, false, nil
+	case map[string]interface{}:
+		msg, _ := v["msg"].(string)
+		fatal, _ := v["fatal"].(bool)
+		if msg == "" && fatal {
+			msg = "upstream returned fatal error"
+		}
+		return msg, fatal, nil
 	default:
-		return "", nil
+		return "", false, nil
 	}
 }
 

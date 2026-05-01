@@ -229,7 +229,7 @@ func pollOneTask(ctx context.Context, task *model.Task, ch *model.Channel) {
 		var isErr bool
 		if ch.ErrorScript != "" {
 			var scriptErr error
-			detectedErr, scriptErr = script.RunCheckError(ch.ErrorScript, mappedResp)
+			detectedErr, _, scriptErr = script.RunCheckError(ch.ErrorScript, mappedResp)
 			if scriptErr != nil {
 				log.Printf("[poller] task %d: error_script failed: %v", task.ID, scriptErr)
 			}

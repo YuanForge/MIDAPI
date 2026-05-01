@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git ls-tree *)",
+      "Bash(awk '{print $4}')",
+      "Bash(git show *)",
+      "Read(//tmp/**)",
+      "Bash(pnpm --version)",
+      "Bash(npm --version)",
+      "Bash(npm install *)",
+      "Bash(npm run *)"
+    ]
+  }
+}

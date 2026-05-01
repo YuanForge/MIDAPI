@@ -725,20 +725,46 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 	if resp.StatusCode != http.StatusOK {
 		bodyErr, _ := io.ReadAll(resp.Body)
 		service.RecordChannelError(c.Request.Context(), channelID)
-		// 5xx 时尝试换渠道
-		if resp.StatusCode >= 500 && len(triedIDs) < maxRetries {
+
+		// 跑 error_script 识别业务错误（含 fatal=余额不足等永久故障）。
+		// 4xx body 通常是 JSON，5xx 也常带结构化错误；非 JSON 时跳过。
+		var bizErr string
+		var fatal bool
+		if ch.ErrorScript != "" {
+			var bodyJSON map[string]interface{}
+			if json.Unmarshal(bodyErr, &bodyJSON) == nil && bodyJSON != nil {
+				bizErr, fatal, _ = script.RunCheckError(ch.ErrorScript, bodyJSON)
+			}
+		}
+		if fatal {
+			_ = service.PatchChannelActive(c.Request.Context(), channelID, false)
+			log.Printf("[llm] disable channel id=%d fatal_err=%q status=%d", channelID, bizErr, resp.StatusCode)
+		}
+
+		// 5xx 总是尝试换渠道；4xx 仅在 error_script 命中时换（fatal 或普通业务错误均触发）。
+		shouldRetry := resp.StatusCode >= 500 || bizErr != ""
+		if shouldRetry && len(triedIDs) < maxRetries {
 			if nextCh := selectNextChannel(c, reqData, triedIDs, stableChannels); nextCh != nil {
 				if totalHold > 0 {
 					_ = billing.Refund(c.Request.Context(), userID, totalHold)
 					_ = service.WriteTx(c.Request.Context(), userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, "refund", totalHold, upstreamCostHold, model.JSON{"reason": "channel_retry"})
+					retryMsg := "channel retry"
+					if bizErr != "" {
+						retryMsg = "channel retry: " + bizErr
+					}
 					_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("status", "error_msg").
-						Update(&model.LLMLog{Status: "error", ErrorMsg: "channel retry"})
+						Update(&model.LLMLog{Status: "error", ErrorMsg: retryMsg})
 				}
 				llmProxyWithChannel(c, nextCh, origReqData, userID, apiKeyIDVal, userGroup, triedIDs, stableChannels)
 				return
 			}
 		}
-		llmRefundAndAbort(c, corrID, userID, totalHold, upstreamCostHold, poolKeyIDVal, resp.StatusCode, fmt.Sprintf("上游返回 %d: %s", resp.StatusCode, string(bodyErr)))
+
+		abortMsg := bizErr
+		if abortMsg == "" {
+			abortMsg = fmt.Sprintf("上游返回 %d: %s", resp.StatusCode, string(bodyErr))
+		}
+		llmRefundAndAbort(c, corrID, userID, totalHold, upstreamCostHold, poolKeyIDVal, resp.StatusCode, abortMsg)
 		return
 	}
 
@@ -757,8 +783,12 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 		if origRespJSON != nil {
 			// error_script 业务错误检测：捕获上游返回 200 但 body 内含错误的情况（如额度耗尽）
 			if ch.ErrorScript != "" {
-				if bizErr, scriptErr := script.RunCheckError(ch.ErrorScript, origRespJSON); scriptErr == nil && bizErr != "" {
+				if bizErr, fatal, scriptErr := script.RunCheckError(ch.ErrorScript, origRespJSON); scriptErr == nil && bizErr != "" {
 					service.RecordChannelError(c.Request.Context(), channelID)
+					if fatal {
+						_ = service.PatchChannelActive(c.Request.Context(), channelID, false)
+						log.Printf("[llm] disable channel id=%d fatal_err=%q status=200", channelID, bizErr)
+					}
 					if len(triedIDs) < maxRetries {
 						if nextCh := selectNextChannel(c, reqData, triedIDs, stableChannels); nextCh != nil {
 							if totalHold > 0 {
@@ -824,8 +854,12 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 			if checkSrc != "" && checkSrc != "[DONE]" {
 				var firstJSON map[string]interface{}
 				if json.Unmarshal([]byte(checkSrc), &firstJSON) == nil {
-					if bizErr, scriptErr := script.RunCheckError(ch.ErrorScript, firstJSON); scriptErr == nil && bizErr != "" {
+					if bizErr, fatal, scriptErr := script.RunCheckError(ch.ErrorScript, firstJSON); scriptErr == nil && bizErr != "" {
 						service.RecordChannelError(c.Request.Context(), channelID)
+						if fatal {
+							_ = service.PatchChannelActive(c.Request.Context(), channelID, false)
+							log.Printf("[llm] disable channel id=%d fatal_err=%q status=200(stream)", channelID, bizErr)
+						}
 						if len(triedIDs) < maxRetries {
 							if nextCh := selectNextChannel(c, reqData, triedIDs, stableChannels); nextCh != nil {
 								if totalHold > 0 {

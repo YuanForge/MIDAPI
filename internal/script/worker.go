@@ -208,7 +208,7 @@ func execJob(ctx context.Context, job *model.TaskJob) *model.WorkerResult {
 	errMsg, isErr := "", false
 	if job.ErrorScript != "" {
 		var scriptErr error
-		errMsg, scriptErr = RunCheckError(job.ErrorScript, respData)
+		errMsg, _, scriptErr = RunCheckError(job.ErrorScript, respData)
 		if scriptErr != nil {
 			log.Printf("[worker] task %d: error_script failed: %v", job.TaskID, scriptErr)
 		}
