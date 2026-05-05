@@ -67,7 +67,7 @@ export function UserProfilePage() {
   const [countdown, setCountdown] = useState(0)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  useEffect(() => { if (isEmailUsername) setEmailInput(profile!.username) }, [isEmailUsername, profile?.username])
+  useEffect(() => { if (isEmailUsername) setEmailInput(profile?.username ?? '') }, [isEmailUsername, profile?.username])
   useEffect(() => () => { if (timerRef.current) clearInterval(timerRef.current) }, [])
 
   async function sendCode() {
