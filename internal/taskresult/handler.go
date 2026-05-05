@@ -140,26 +140,29 @@ func handleResult(msg *nats.Msg) {
 				if res.CreditsCharged > 0 {
 					var chargeTx model.BillingTransaction
 					upstreamCostOld := int64(0)
-				mcChargedOld := int64(0)
-				routingKeyOld := ""
-				if found, _ := db.Engine.Where("corr_id = ? AND type = ?", res.CorrID, "charge").Get(&chargeTx); found {
-					upstreamCostOld = chargeTx.Cost
-					mcChargedOld = chargeTx.ModelCreditCharged
-					if rk, ok := chargeTx.Metrics["routing_key"].(string); ok {
-						routingKeyOld = rk
+					mcChargedOld := int64(0)
+					routingKeyOld := ""
+					if found, _ := db.Engine.Where("corr_id = ? AND type = ?", res.CorrID, "charge").Get(&chargeTx); found {
+						upstreamCostOld = chargeTx.Cost
+						mcChargedOld = chargeTx.ModelCreditCharged
+						if rk, ok := chargeTx.Metrics["routing_key"].(string); ok {
+							routingKeyOld = rk
+						}
 					}
+					if mcChargedOld > 0 && routingKeyOld != "" {
+						_ = billing.RefundModelCredit(ctx, res.UserID, routingKeyOld, mcChargedOld)
+					}
+					generalRefundOld := res.CreditsCharged - mcChargedOld
+					if generalRefundOld > 0 {
+						_ = billing.Refund(ctx, res.UserID, generalRefundOld)
+					}
+					_ = service.WriteTx(ctx, res.UserID, res.ChannelID, res.APIKeyID, res.PoolKeyID, res.CorrID, "refund", res.CreditsCharged, upstreamCostOld, mcChargedOld, model.JSON{
+						"task_id":     res.TaskID,
+						"routing_key": routingKeyOld,
+						"reason":      "stable_key_channel_retry",
+					})
 				}
-				if mcChargedOld > 0 && routingKeyOld != "" {
-					_ = billing.RefundModelCredit(ctx, res.UserID, routingKeyOld, mcChargedOld)
-				}
-				generalRefundOld := res.CreditsCharged - mcChargedOld
-				if generalRefundOld > 0 {
-					_ = billing.Refund(ctx, res.UserID, generalRefundOld)
-				}
-				_ = service.WriteTx(ctx, res.UserID, res.ChannelID, res.APIKeyID, res.PoolKeyID, res.CorrID, "refund", res.CreditsCharged, upstreamCostOld, mcChargedOld, model.JSON{
-					"task_id":     res.TaskID,
-					"routing_key": routingKeyOld,
-					"reason":      "stable_key_channel_retry",
+
 				var userGroup string
 				var task model.Task
 				if found, _ := db.Engine.ID(res.TaskID).Cols("request").Get(&task); found {
