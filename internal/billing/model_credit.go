@@ -142,15 +142,30 @@ func AddModelCredit(ctx context.Context, userID int64, modelName string, credits
 	if credits <= 0 {
 		return fmt.Errorf("积分数量必须大于 0")
 	}
-	// upsert
-	_, err := db.Engine.Exec(`
-		INSERT INTO user_model_credits (user_id, model_name, credits, created_at, updated_at)
-		VALUES ($1, $2, $3, NOW(), NOW())
-		ON CONFLICT (user_id, model_name)
-		DO UPDATE SET credits = user_model_credits.credits + $3, updated_at = NOW()
-	`, userID, modelName, credits)
+	// 先尝试 UPDATE，若记录不存在（0 行）则 INSERT；比 ON CONFLICT 更兼容（不依赖约束是否已建）
+	result, err := db.Engine.Exec(
+		"UPDATE user_model_credits SET credits = credits + $1, updated_at = NOW() WHERE user_id = $2 AND model_name = $3",
+		credits, userID, modelName,
+	)
 	if err != nil {
 		return err
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		_, err = db.Engine.Exec(
+			"INSERT INTO user_model_credits (user_id, model_name, credits, created_at, updated_at) VALUES ($1, $2, $3, NOW(), NOW())",
+			userID, modelName, credits,
+		)
+		if err != nil {
+			// 并发场景下可能已被其他请求插入，退化为再次 UPDATE
+			_, err = db.Engine.Exec(
+				"UPDATE user_model_credits SET credits = credits + $1, updated_at = NOW() WHERE user_id = $2 AND model_name = $3",
+				credits, userID, modelName,
+			)
+			if err != nil {
+				return err
+			}
+		}
 	}
 	// 同步 Redis
 	_, err = SyncModelCreditToRedis(ctx, userID, modelName)
