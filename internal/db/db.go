@@ -67,6 +67,7 @@ func Init(cfg *config.DBConfig, migrate bool) error {
 		new(model.Vendor),
 		new(model.WithdrawRequest),
 		new(model.UserModelCredit),
+		new(model.ChatConversation),
 	); err != nil {
 		return err
 	}

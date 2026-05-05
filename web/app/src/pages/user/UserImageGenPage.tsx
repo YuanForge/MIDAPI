@@ -8,7 +8,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { NativeSelect } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-import { userApi, type ApiKeyRecord, type UserChannel } from '@/lib/api/user'
+import { userApi, type ApiKeyRecord, type UserChannel, type UserTask } from '@/lib/api/user'
 
 export function UserImageGenPage() {
   const [apiKeys, setApiKeys] = useState<ApiKeyRecord[]>([])
@@ -21,6 +21,8 @@ export function UserImageGenPage() {
   const [aspectRatio, setAspectRatio] = useState('1:1')
   const [referenceImages, setReferenceImages] = useState('')
   const [taskId, setTaskId] = useState('')
+  const [taskStatus, setTaskStatus] = useState<'idle' | 'polling' | 'done' | 'failed'>('idle')
+  const [taskError, setTaskError] = useState('')
   const [images, setImages] = useState<string[]>([])
   const [running, setRunning] = useState(false)
   const [uploadingReference, setUploadingReference] = useState(false)
@@ -49,10 +51,66 @@ export function UserImageGenPage() {
     void load()
   }, [])
 
+  const [historyTasks, setHistoryTasks] = useState<UserTask[]>([])
+
+  async function loadHistory() {
+    try {
+      const res = await userApi.listTasks({ type: 'image', status: 'done', size: 20 })
+      const tasks = Array.isArray(res) ? res : (res.tasks ?? res.items ?? [])
+      setHistoryTasks(tasks)
+    } catch { /* ignore */ }
+  }
+
+  useEffect(() => { void loadHistory() }, [])
+
   function currentApiKey() {
     const key = apiKeys.find((item) => item.id === selectedKeyId)
     return key?.raw_key || key?.key || ''
   }
+
+  // 异步任务轮询：task_id 存在且处于 polling 状态时每 3s 查询一次
+  useEffect(() => {
+    if (!taskId || taskStatus !== 'polling') return
+    const key = apiKeys.find((item) => item.id === selectedKeyId)
+    const apiKey = key?.raw_key || key?.key || ''
+    if (!apiKey) return
+    let cancelled = false
+
+    const tick = async () => {
+      try {
+        const resp = await fetch(`/v1/tasks/${taskId}`, {
+          headers: { Authorization: `Bearer ${apiKey}` },
+        })
+        if (!resp.ok) return
+        const data = await resp.json() as { status?: string | number; result?: Record<string, unknown>; error_msg?: string; msg?: string }
+        if (cancelled) return
+        const st = data.status
+        if (st === 'done' || st === 2) {
+          const result = data.result ?? {}
+          const urlList: string[] = []
+          if (Array.isArray(result.urls)) {
+            urlList.push(...(result.urls as string[]).filter(Boolean))
+          } else if (typeof result.url === 'string' && result.url) {
+            urlList.push(result.url)
+          }
+          setImages(urlList)
+          setTaskStatus('done')
+          setRunning(false)
+          void loadHistory()
+        } else if (st === 'failed' || st === 3) {
+          setTaskError(data.error_msg ?? data.msg ?? '生成失败')
+          setTaskStatus('failed')
+          setRunning(false)
+        }
+      } catch {
+        // 忽略单次轮询失败
+      }
+    }
+
+    const timer = setInterval(() => { void tick() }, 3000)
+    void tick()
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [taskId, taskStatus, apiKeys, selectedKeyId])
 
   function currentChannel() {
     return channels.find((item) => item.id === selectedChannelId) ?? channels[0]
@@ -112,6 +170,8 @@ export function UserImageGenPage() {
     setRunning(true)
     setImages([])
     setTaskId('')
+    setTaskStatus('idle')
+    setTaskError('')
     setError('')
     try {
       const endpoint = currentChannel()?.id
@@ -136,16 +196,18 @@ export function UserImageGenPage() {
       if (!response.ok) {
         throw new Error((await response.text()) || `请求失败 (${response.status})`)
       }
-      const data = await response.json()
+      const data = await response.json() as { task_id?: number | string; data?: { url?: string }[] }
       if (data.task_id) {
         setTaskId(String(data.task_id))
+        setTaskStatus('polling')
       }
       if (Array.isArray(data.data)) {
-        setImages(
-          data.data
-            .map((item: { url?: string }) => item.url)
-            .filter((item: string | undefined): item is string => Boolean(item))
-        )
+        const syncImages = data.data
+          .map((item) => item.url)
+          .filter((u): u is string => Boolean(u))
+        setImages(syncImages)
+        setTaskStatus('done')
+        setRunning(false)
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : '图片生成失败')
@@ -166,7 +228,7 @@ export function UserImageGenPage() {
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       ) : null}
-      <div className="grid gap-4 xl:grid-cols-[320px_1fr]">
+      <div className="grid gap-4 xl:grid-cols-[320px_1fr] 2xl:grid-cols-[320px_1fr_240px]">
         <Card>
           <CardContent className="flex flex-col gap-4 p-6">
             <div className="grid gap-1.5">
@@ -269,17 +331,65 @@ export function UserImageGenPage() {
         </Card>
         <Card>
           <CardContent className="flex flex-col gap-4 p-6">
-            {taskId ? <p className="text-sm text-muted-foreground">任务 ID：{taskId}</p> : null}
+            {taskStatus === 'polling' ? (
+              <Alert>
+                <AlertDescription>
+                  生成中，任务 ID：<span className="font-mono">{taskId}</span>，完成后将自动展示。
+                </AlertDescription>
+              </Alert>
+            ) : null}
+            {taskStatus === 'failed' && taskError ? (
+              <Alert variant="destructive">
+                <AlertDescription>{taskError}</AlertDescription>
+              </Alert>
+            ) : null}
+            {taskId && taskStatus !== 'polling' ? (
+              <p className="text-xs text-muted-foreground">任务 ID：{taskId}</p>
+            ) : null}
             {images.length > 0 ? (
               <div className="grid gap-4 md:grid-cols-2">
                 {images.map((url) => (
-                  <img key={url} className="rounded-xl border border-border/70" src={url} alt="generated" />
+                  <a key={url} href={url} target="_blank" rel="noopener noreferrer">
+                    <img className="rounded-xl border border-border/70 w-full" src={url} alt="generated" />
+                  </a>
                 ))}
               </div>
-            ) : (
+            ) : taskStatus === 'idle' ? (
               <p className="text-sm text-muted-foreground">提交后将在这里展示结果。</p>
-            )}
+            ) : null}
           </CardContent>
+        </Card>
+        <Card className="hidden 2xl:flex flex-col overflow-hidden">
+          <div className="flex items-center justify-between border-b px-4 py-3 shrink-0">
+            <span className="text-sm font-semibold">历史生成</span>
+            <button type="button" onClick={() => void loadHistory()} className="text-xs text-muted-foreground hover:text-foreground">刷新</button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-2">
+            {historyTasks.length === 0 ? (
+              <p className="py-10 text-center text-xs text-muted-foreground">暂无历史记录</p>
+            ) : (
+              <div className="grid grid-cols-2 gap-1.5">
+                {historyTasks.map((task) => {
+                  const url = (task.result?.url as string | undefined) ?? ''
+                  const urls = Array.isArray(task.result?.urls) ? (task.result!.urls as string[]) : []
+                  const displayUrl = url || urls[0] || ''
+                  const prompt = (task.request?.prompt as string | undefined) ?? ''
+                  return displayUrl ? (
+                    <a
+                      key={task.id}
+                      href={displayUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={prompt}
+                      className="block overflow-hidden rounded-md border border-border/60"
+                    >
+                      <img src={displayUrl} alt={prompt} className="h-20 w-full object-cover" />
+                    </a>
+                  ) : null
+                })}
+              </div>
+            )}
+          </div>
         </Card>
       </div>
     </>

@@ -156,6 +156,20 @@ export type UserModelCredit = {
   credits?: number
 }
 
+export type ConversationMessage = {
+  role: 'user' | 'assistant' | 'system'
+  content: string
+}
+
+export type ChatConversation = {
+  id: number
+  title: string
+  model: string
+  messages: ConversationMessage[]
+  created_at: string
+  updated_at: string
+}
+
 export const userApi = {
   getProfile: () => http.get<UserProfileResponse>('/user/profile'),
   getBalance: () => http.get<UserBalanceResponse>('/user/balance'),
@@ -210,4 +224,10 @@ export const userApi = {
     uploadAuthedImage('user', file, category),
   getModelCredits: () =>
     http.get<{ model_credits?: UserModelCredit[] }>('/user/model-credits'),
+  listConversations: (size = 50) =>
+    http.get<{ items: ChatConversation[] }>('/v1/conversations', { params: { size } }),
+  saveConversation: (payload: { id?: number; title: string; model: string; messages: ConversationMessage[] }) =>
+    http.post<ChatConversation>('/v1/conversations', payload),
+  deleteConversation: (id: number) =>
+    http.delete<{ ok: boolean }>(`/v1/conversations/${id}`),
 }

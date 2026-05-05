@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { NativeSelect } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-import { userApi, type ApiKeyRecord, type UserChannel } from '@/lib/api/user'
+import { userApi, type ApiKeyRecord, type UserChannel, type ChatConversation, type ConversationMessage } from '@/lib/api/user'
 
 type Message = {
   role: 'user' | 'assistant'
@@ -32,7 +32,16 @@ export function UserPlaygroundPage() {
   const [messages, setMessages] = useState<Message[]>([])
   const [streaming, setStreaming] = useState(false)
   const [streamingText, setStreamingText] = useState('')
+  const [conversations, setConversations] = useState<ChatConversation[]>([])
+  const [currentConvId, setCurrentConvId] = useState<number | undefined>()
   const scrollRef = useRef<HTMLDivElement | null>(null)
+
+  async function loadConversations() {
+    try {
+      const res = await userApi.listConversations()
+      setConversations(res.items ?? [])
+    } catch { /* ignore */ }
+  }
 
   useEffect(() => {
     async function load() {
@@ -55,6 +64,7 @@ export function UserPlaygroundPage() {
     }
 
     void load()
+    void loadConversations()
   }, [])
 
   useEffect(() => {
@@ -68,6 +78,33 @@ export function UserPlaygroundPage() {
 
   function currentChannel() {
     return channels.find((item) => item.id === selectedChannelId) ?? channels[0]
+  }
+
+  async function saveCurrentConversation() {
+    if (messages.length === 0) return
+    const title = messages.find((m) => m.role === 'user')?.content.slice(0, 40) ?? '对话'
+    const model = currentChannel()?.routing_model || currentChannel()?.name || ''
+    try {
+      const saved = await userApi.saveConversation({
+        id: currentConvId,
+        title,
+        model,
+        messages: messages as ConversationMessage[],
+      })
+      setCurrentConvId(saved.id)
+      await loadConversations()
+    } catch { /* ignore */ }
+  }
+
+  async function deleteConversation(id: number) {
+    try {
+      await userApi.deleteConversation(id)
+      setConversations((prev) => prev.filter((c) => c.id !== id))
+      if (currentConvId === id) {
+        setMessages([])
+        setCurrentConvId(undefined)
+      }
+    } catch { /* ignore */ }
   }
 
   async function sendMessage() {
@@ -171,14 +208,14 @@ export function UserPlaygroundPage() {
         eyebrow="Playground"
         title="文本对话"
         description="已经接上真实 `/v1/chat/completions`，可直接用已有 API Key 做对话验证。"
-        actions={<Button onClick={() => setMessages([])}>新对话</Button>}
+        actions={<Button onClick={() => { void saveCurrentConversation().then(() => { setMessages([]); setCurrentConvId(undefined) }) }}>新对话</Button>}
       />
       {error ? (
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       ) : null}
-      <div className="grid gap-4 xl:grid-cols-[320px_1fr]">
+      <div className="grid gap-4 xl:grid-cols-[320px_1fr] 2xl:grid-cols-[320px_1fr_240px]">
         <Card>
           <CardContent className="flex flex-col gap-4 p-6">
             <div className="flex flex-col gap-2">
@@ -332,6 +369,38 @@ export function UserPlaygroundPage() {
               </div>
             </div>
           </CardContent>
+        </Card>
+        <Card className="hidden 2xl:flex flex-col overflow-hidden">
+          <div className="flex items-center justify-between border-b px-4 py-3 shrink-0">
+            <span className="text-sm font-semibold">历史对话</span>
+            <button type="button" onClick={() => void loadConversations()} className="text-xs text-muted-foreground hover:text-foreground">刷新</button>
+          </div>
+          <div className="flex-1 overflow-y-auto divide-y divide-border/60">
+            {conversations.length === 0 ? (
+              <p className="px-4 py-10 text-center text-xs text-muted-foreground">暂无历史对话</p>
+            ) : (
+              conversations.map((conv) => (
+                <div
+                  key={conv.id}
+                  className={`group flex cursor-pointer items-start gap-2 px-3 py-2.5 hover:bg-muted/40 ${currentConvId === conv.id ? 'bg-muted/60' : ''}`}
+                  onClick={() => { setMessages(conv.messages as Message[]); setCurrentConvId(conv.id); setStreamingText('') }}
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-xs font-medium leading-tight">{conv.title}</p>
+                    <p className="mt-0.5 truncate text-xs text-muted-foreground">{conv.model}</p>
+                    <p className="text-xs text-muted-foreground">{new Date(conv.updated_at).toLocaleDateString('zh-CN')}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); void deleteConversation(conv.id) }}
+                    className="shrink-0 text-sm text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
         </Card>
       </div>
     </>

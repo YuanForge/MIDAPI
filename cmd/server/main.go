@@ -252,6 +252,9 @@ func main() {
 		authed.GET("/v1/tasks/:id/billing", handler.GetTaskBilling)
 		authed.GET("/v1/llm-logs", handler.UserListLLMLogs)
 		authed.GET("/v1/llm-logs/:id", handler.UserGetLLMLog)
+		authed.GET("/v1/conversations", handler.ListConversations)
+		authed.POST("/v1/conversations", handler.SaveConversation)
+		authed.DELETE("/v1/conversations/:id", handler.DeleteConversation)
 
 		// 公开 API（需要 API Key）
 		v1 := authed.Group("/v1")

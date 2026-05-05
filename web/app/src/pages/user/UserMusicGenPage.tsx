@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { NativeSelect } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-import { userApi, type ApiKeyRecord, type UserChannel } from '@/lib/api/user'
+import { userApi, type ApiKeyRecord, type UserChannel, type UserTask } from '@/lib/api/user'
 
 type MusicMode = '10' | '20'
 
@@ -68,6 +68,18 @@ export function UserMusicGenPage() {
     return key?.raw_key || key?.key || ''
   }
 
+  const [historyTasks, setHistoryTasks] = useState<UserTask[]>([])
+
+  async function loadHistory() {
+    try {
+      const res = await userApi.listTasks({ type: 'music', status: 'done', size: 20 })
+      const tasks = Array.isArray(res) ? res : (res.tasks ?? res.items ?? [])
+      setHistoryTasks(tasks)
+    } catch { /* ignore */ }
+  }
+
+  useEffect(() => { void loadHistory() }, [])
+
   function currentChannel() {
     return channels.find((item) => item.id === selectedChannelId) ?? channels[0]
   }
@@ -96,6 +108,7 @@ export function UserMusicGenPage() {
           setItems(list)
           setTaskStatus('done')
           setRunning(false)
+          void loadHistory()
         } else if ((typeof data.code === 'number' && data.code >= 400) || data.status === 3) {
           setTaskError(data.msg || '生成失败')
           setTaskStatus('failed')
@@ -191,7 +204,7 @@ export function UserMusicGenPage() {
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       ) : null}
-      <div className="grid gap-4 xl:grid-cols-[320px_1fr]">
+      <div className="grid gap-4 xl:grid-cols-[320px_1fr] 2xl:grid-cols-[320px_1fr_240px]">
         <Card>
           <CardContent className="flex flex-col gap-4 p-6">
             <div className="grid gap-1.5">
@@ -338,6 +351,38 @@ export function UserMusicGenPage() {
               </div>
             ))}
           </CardContent>
+        </Card>
+        <Card className="hidden 2xl:flex flex-col overflow-hidden">
+          <div className="flex items-center justify-between border-b px-4 py-3 shrink-0">
+            <span className="text-sm font-semibold">历史生成</span>
+            <button type="button" onClick={() => void loadHistory()} className="text-xs text-muted-foreground hover:text-foreground">刷新</button>
+          </div>
+          <div className="flex-1 overflow-y-auto divide-y divide-border/60">
+            {historyTasks.length === 0 ? (
+              <p className="py-10 text-center text-xs text-muted-foreground">暂无历史记录</p>
+            ) : (
+              historyTasks.map((task) => {
+                const res = task.result as { items?: Array<{ title?: string; audio_url?: string }> } | undefined
+                const firstItem = res?.items?.[0]
+                const taskPrompt = (task.request?.gpt_description_prompt as string | undefined)
+                  ?? (task.request?.prompt as string | undefined)
+                  ?? ''
+                return (
+                  <div key={task.id} className="flex flex-col gap-1 px-3 py-2.5">
+                    <p className="truncate text-xs font-medium">{firstItem?.title ?? (taskPrompt.slice(0, 30) || '音乐生成')}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {task.created_at ? new Date(task.created_at).toLocaleDateString('zh-CN') : ''}
+                    </p>
+                    {firstItem?.audio_url ? (
+                      <audio controls src={firstItem.audio_url} className="mt-0.5 h-7 w-full">
+                        <track kind="captions" />
+                      </audio>
+                    ) : null}
+                  </div>
+                )
+              })
+            )}
+          </div>
         </Card>
       </div>
     </>
