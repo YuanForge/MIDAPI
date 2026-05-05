@@ -23,10 +23,14 @@ export function clearRoleToken(role: Role) {
 }
 
 export function getSiteModePreference() {
-  return window.localStorage.getItem(MODE_KEY) ?? 'user'
+  // sessionStorage: per-tab，每个标签页独立；未设置时回退到 localStorage 历史值
+  return window.sessionStorage.getItem(MODE_KEY)
+    ?? window.localStorage.getItem(MODE_KEY)
+    ?? 'user'
 }
 
 export function setSiteModePreference(mode: Role) {
+  window.sessionStorage.setItem(MODE_KEY, mode)
   window.localStorage.setItem(MODE_KEY, mode)
 }
 
