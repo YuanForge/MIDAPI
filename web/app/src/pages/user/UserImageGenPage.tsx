@@ -370,22 +370,25 @@ export function UserImageGenPage() {
             ) : (
               <div className="grid grid-cols-2 gap-1.5">
                 {historyTasks.map((task) => {
-                  const url = (task.result?.url as string | undefined) ?? ''
-                  const urls = Array.isArray(task.result?.urls) ? (task.result!.urls as string[]) : []
-                  const displayUrl = url || urls[0] || ''
+                  const imgUrl = task.url ?? (task.result?.url as string | undefined) ?? ''
                   const prompt = (task.request?.prompt as string | undefined) ?? ''
-                  return displayUrl ? (
+                  const date = task.created_at ? new Date(task.created_at).toLocaleDateString('zh-CN') : ''
+                  if (!imgUrl) return null
+                  return (
                     <a
-                      key={task.id}
-                      href={displayUrl}
+                      key={task.task_id ?? task.id}
+                      href={imgUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      title={prompt}
-                      className="block overflow-hidden rounded-md border border-border/60"
+                      className="group relative block overflow-hidden rounded-lg border border-border/50"
                     >
-                      <img src={displayUrl} alt={prompt} className="h-20 w-full object-cover" />
+                      <img src={imgUrl} alt={prompt} className="aspect-square w-full object-cover" loading="lazy" />
+                      <div className="absolute inset-0 flex flex-col justify-end bg-gradient-to-t from-black/70 via-black/20 to-transparent p-1.5 opacity-0 transition-opacity group-hover:opacity-100">
+                        {prompt ? <p className="line-clamp-3 text-[10px] leading-tight text-white">{prompt}</p> : null}
+                        <p className="mt-0.5 text-[9px] text-white/60">{date}</p>
+                      </div>
                     </a>
-                  ) : null
+                  )
                 })}
               </div>
             )}

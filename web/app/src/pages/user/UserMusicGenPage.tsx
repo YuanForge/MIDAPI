@@ -357,24 +357,38 @@ export function UserMusicGenPage() {
             <span className="text-sm font-semibold">历史生成</span>
             <button type="button" onClick={() => void loadHistory()} className="text-xs text-muted-foreground hover:text-foreground">刷新</button>
           </div>
-          <div className="flex-1 overflow-y-auto divide-y divide-border/60">
+          <div className="flex-1 overflow-y-auto divide-y divide-border/50">
             {historyTasks.length === 0 ? (
               <p className="py-10 text-center text-xs text-muted-foreground">暂无历史记录</p>
             ) : (
               historyTasks.map((task) => {
-                const res = task.result as { items?: Array<{ title?: string; audio_url?: string }> } | undefined
-                const firstItem = res?.items?.[0]
+                type MusicItem = { title?: string; audio_url?: string; image_url?: string; tags?: string }
+                const musicItems = (task.items as MusicItem[] | undefined)
+                  ?? (task.result as { items?: MusicItem[] } | undefined)?.items
+                  ?? []
+                const first = musicItems[0]
                 const taskPrompt = (task.request?.gpt_description_prompt as string | undefined)
                   ?? (task.request?.prompt as string | undefined)
                   ?? ''
+                const date = task.created_at ? new Date(task.created_at).toLocaleDateString('zh-CN') : ''
                 return (
-                  <div key={task.id} className="flex flex-col gap-1 px-3 py-2.5">
-                    <p className="truncate text-xs font-medium">{firstItem?.title ?? (taskPrompt.slice(0, 30) || '音乐生成')}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {task.created_at ? new Date(task.created_at).toLocaleDateString('zh-CN') : ''}
-                    </p>
-                    {firstItem?.audio_url ? (
-                      <audio controls src={firstItem.audio_url} className="mt-0.5 h-7 w-full">
+                  <div key={task.task_id ?? task.id} className="flex flex-col gap-2 p-2.5">
+                    <div className="flex items-center gap-2">
+                      {first?.image_url ? (
+                        <img src={first.image_url} alt="" className="h-9 w-9 shrink-0 rounded-md object-cover" loading="lazy" />
+                      ) : (
+                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-gradient-to-br from-purple-500/20 to-pink-500/20 text-base">
+                          🎵
+                        </div>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-xs font-medium">{first?.title ?? (taskPrompt.slice(0, 24) || '音乐生成')}</p>
+                        {first?.tags ? <p className="truncate text-[10px] text-muted-foreground">{first.tags}</p> : null}
+                        <p className="text-[10px] text-muted-foreground">{date}</p>
+                      </div>
+                    </div>
+                    {first?.audio_url ? (
+                      <audio controls src={first.audio_url} className="h-7 w-full">
                         <track kind="captions" />
                       </audio>
                     ) : null}

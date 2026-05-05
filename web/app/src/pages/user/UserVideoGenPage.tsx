@@ -243,22 +243,38 @@ export function UserVideoGenPage() {
             <span className="text-sm font-semibold">历史生成</span>
             <button type="button" onClick={() => void loadHistory()} className="text-xs text-muted-foreground hover:text-foreground">刷新</button>
           </div>
-          <div className="flex-1 overflow-y-auto divide-y divide-border/60">
+          <div className="flex-1 overflow-y-auto divide-y divide-border/50">
             {historyTasks.length === 0 ? (
               <p className="py-10 text-center text-xs text-muted-foreground">暂无历史记录</p>
             ) : (
               historyTasks.map((task) => {
-                const url = (task.result?.url as string | undefined) ?? ''
-                const prompt = ((task.request?.prompt as string | undefined) ?? '').slice(0, 40) || '视频生成'
+                const url = task.url ?? (task.result?.url as string | undefined) ?? ''
+                const prompt = ((task.request?.prompt as string | undefined) ?? '').trim() || '视频生成'
+                const date = task.created_at ? new Date(task.created_at).toLocaleDateString('zh-CN') : ''
                 return (
-                  <div key={task.id} className="flex flex-col gap-0.5 px-3 py-2.5">
-                    <p className="truncate text-xs font-medium">{prompt}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {task.created_at ? new Date(task.created_at).toLocaleDateString('zh-CN') : ''}
-                    </p>
+                  <div key={task.task_id ?? task.id} className="flex flex-col gap-2 p-2.5">
+                    <div className="flex items-start gap-2">
+                      <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-muted/60">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4 text-muted-foreground">
+                          <path d="M4.5 4.5a3 3 0 00-3 3v9a3 3 0 003 3h8.25a3 3 0 003-3v-9a3 3 0 00-3-3H4.5zM19.94 18.75l-2.69-2.69V7.94l2.69-2.69c.944-.945 2.56-.276 2.56 1.06v11.38c0 1.336-1.616 2.005-2.56 1.06z" />
+                        </svg>
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="line-clamp-2 text-xs font-medium leading-snug">{prompt}</p>
+                        <p className="mt-0.5 text-[10px] text-muted-foreground">{date}</p>
+                      </div>
+                    </div>
                     {url ? (
-                      <a href={url} target="_blank" rel="noopener noreferrer" className="text-xs text-primary underline">
-                        查看视频 →
+                      <a
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center justify-center gap-1.5 rounded-md bg-primary/10 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/20"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="h-3 w-3">
+                          <path fillRule="evenodd" d="M4.5 5.653c0-1.426 1.529-2.33 2.779-1.643l11.54 6.348c1.295.712 1.295 2.573 0 3.285L7.28 19.991c-1.25.687-2.779-.217-2.779-1.643V5.653z" clipRule="evenodd" />
+                        </svg>
+                        播放视频
                       </a>
                     ) : null}
                   </div>

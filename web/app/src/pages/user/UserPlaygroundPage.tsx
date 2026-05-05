@@ -382,14 +382,10 @@ export function UserPlaygroundPage() {
               conversations.map((conv) => (
                 <div
                   key={conv.id}
-                  className={`group flex cursor-pointer items-start gap-2 px-3 py-2.5 hover:bg-muted/40 ${currentConvId === conv.id ? 'bg-muted/60' : ''}`}
+                  className={`group flex cursor-pointer items-center gap-1.5 px-3 py-2 hover:bg-muted/50 ${currentConvId === conv.id ? 'bg-muted/70' : ''}`}
                   onClick={() => { setMessages(conv.messages as Message[]); setCurrentConvId(conv.id); setStreamingText('') }}
                 >
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-xs font-medium leading-tight">{conv.title}</p>
-                    <p className="mt-0.5 truncate text-xs text-muted-foreground">{conv.model}</p>
-                    <p className="text-xs text-muted-foreground">{new Date(conv.updated_at).toLocaleDateString('zh-CN')}</p>
-                  </div>
+                  <p className="flex-1 truncate text-xs leading-snug">{conv.title}</p>
                   <button
                     type="button"
                     onClick={(e) => { e.stopPropagation(); void deleteConversation(conv.id) }}

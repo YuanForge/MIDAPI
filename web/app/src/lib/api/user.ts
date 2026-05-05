@@ -68,6 +68,9 @@ export type UserTask = {
   task_id?: number
   task_type?: string
   type?: string
+  code?: number
+  url?: string        // top-level image/video URL (from TaskResult)
+  items?: unknown[]   // top-level items array (music, multi-result tasks)
   status?: number | string
   msg?: string
   error_msg?: string
