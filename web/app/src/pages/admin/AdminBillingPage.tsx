@@ -163,9 +163,16 @@ export function AdminBillingPage() {
                       <TableCell className="text-muted-foreground">{row.id ?? '-'}</TableCell>
                       <TableCell className="text-muted-foreground">{row.user_id ?? '-'}</TableCell>
                       <TableCell>
-                        <Badge variant={txTypeVariant(row.type)} className="text-xs">
-                          {txTypeLabel(row.type)}
-                        </Badge>
+                        <div className="flex flex-wrap items-center gap-1">
+                          <Badge variant={txTypeVariant(row.type)} className="text-xs">
+                            {txTypeLabel(row.type)}
+                          </Badge>
+                          {(row.model_credit_charged ?? 0) > 0 && (
+                            <Badge variant="outline" className="text-xs text-purple-600 border-purple-300">
+                              专属积分
+                            </Badge>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell className={`text-right font-mono text-sm ${isDebit ? 'text-red-500' : 'text-emerald-600'}`}>
                         {isDebit ? '-' : '+'}{Math.abs(amount).toLocaleString('zh-CN', { minimumFractionDigits: 4, maximumFractionDigits: 4 })}

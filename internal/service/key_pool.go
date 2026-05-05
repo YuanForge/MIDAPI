@@ -77,7 +77,7 @@ func MarkExhaustedAndRotate(ctx context.Context, poolID, poolKeyID, entityID int
 }
 
 // rotatePoolKey 从池中选择第一个未耗尽的可用 Key（跳过 skipKeyID），并写入分配记录。
-func rotatePoolKey(ctx context.Context, poolID, entityID int64, assignKey string, skipKeyID int64) (*model.PoolKey, error) {
+func rotatePoolKey(ctx context.Context, poolID, _ int64, assignKey string, skipKeyID int64) (*model.PoolKey, error) {
 	var keys []model.PoolKey
 	if err := db.Engine.Where("pool_id = ? AND is_active = true", poolID).
 		OrderBy("priority ASC, id ASC").Find(&keys); err != nil {

@@ -363,9 +363,10 @@ func ListAllTransactions(c *gin.Context) {
 	views := make([]transactionView, len(txs))
 	for i, tx := range txs {
 		profitCredits := int64(0)
-		if tx.Type == "refund" {
+		switch tx.Type {
+		case "refund":
 			profitCredits = -(tx.Credits - tx.Cost)
-		} else if tx.Type == "charge" || tx.Type == "settle" || tx.Type == "hold" {
+		case "charge", "settle", "hold":
 			profitCredits = tx.Credits - tx.Cost
 		}
 

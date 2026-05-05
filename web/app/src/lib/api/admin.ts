@@ -87,6 +87,7 @@ export type AdminTransaction = {
   type?: string
   amount?: number
   credits?: number
+  model_credit_charged?: number
   cost?: number
   profit?: number
   channel_id?: number

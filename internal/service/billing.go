@@ -11,41 +11,44 @@ import (
 	"fanapi/internal/model"
 )
 
-// WriteTx 写入一条计费流水并同步更新用户的 DB 余额。
+// WriteTx 写入一条计费流水并同步更新用户的 DB 通用余额。
 // poolKeyID 为本次请求使用的号池 Key ID（0 表示未使用号池）。
 // cost 为支付给上游的进价成本（若暂不记录可传 0）。
+// modelCreditCharged 为本次从专属模型积分中扣除的数量（0 表示全部来自通用余额）。
+// DB 仅更新通用余额（users.balance），模型积分存储在 user_model_credits 表中。
 //
 // DB 余额权威策略：
-//   - "hold"    ：仅插入流水记录，不动 DB（Redis 已原子扣款，不要重复扣 DB）
-//   - "settle"  ：将实际费用写入 DB（Redis 已由 Charge+Refund 组合处理好）
+//   - "hold"    ：按 (credits - modelCreditCharged) 扣除 DB 通用余额
+//   - "settle"  ：同上，结算差额（Redis 已由 Charge+Refund 组合处理好）
 //   - "charge"  ：直接一次性扣费（图片/视频/音频），DB 同步扣款
-//   - "refund"  ：退款加回 DB
+//   - "refund"  ：将通用余额部分加回 DB
 //   - "recharge"：充值加到 DB
-func WriteTx(ctx context.Context, userID, channelID, apiKeyID, poolKeyID int64, corrID, txType string, credits, cost int64, metrics model.JSON) error {
+func WriteTx(ctx context.Context, userID, channelID, apiKeyID, poolKeyID int64, corrID, txType string, credits, cost, modelCreditCharged int64, metrics model.JSON) error {
 	tx := &model.BillingTransaction{
-		UserID:    userID,
-		ChannelID: channelID,
-		APIKeyID:  apiKeyID,
-		PoolKeyID: poolKeyID,
-		CorrID:    corrID,
-		Type:      txType,
-		Credits:   credits,
-		Cost:      cost,
-		Metrics:   metrics,
+		UserID:             userID,
+		ChannelID:          channelID,
+		APIKeyID:           apiKeyID,
+		PoolKeyID:          poolKeyID,
+		CorrID:             corrID,
+		Type:               txType,
+		Credits:            credits,
+		ModelCreditCharged: modelCreditCharged,
+		Cost:               cost,
+		Metrics:            metrics,
 	}
 
-	// 仅以下类型同步 DB 余额：
-	// - hold    预扣时同步扣除 DB
-	// - settle  结算时扣除输出部分
-	// - charge  直接扣除（图片/视频/音频）
-	// - refund  恢复不应扣除的金额
-	// - recharge 充值
+	// DB 仅反映通用余额变化；专属模型积分变化记录在 user_model_credits 表。
+	generalCredits := credits - modelCreditCharged
+	if generalCredits < 0 {
+		generalCredits = 0
+	}
+
 	var delta int64
 	switch txType {
 	case "charge", "settle", "hold":
-		delta = -credits
+		delta = -generalCredits
 	case "refund", "recharge":
-		delta = credits
+		delta = generalCredits
 	}
 
 	if delta != 0 {
@@ -170,7 +173,7 @@ func applyPostBillingHooks(userID, poolKeyID, credits, cost int64) {
 }
 
 // getRebateRatio 返回有效的返佣比例：优先使用用户个人设置，否则读取系统默认值。
-func getRebateRatio(ctx context.Context, userRatio *float64) float64 {
+func getRebateRatio(_ context.Context, userRatio *float64) float64 {
 	if userRatio != nil {
 		return *userRatio
 	}
@@ -185,7 +188,7 @@ func getRebateRatio(ctx context.Context, userRatio *float64) float64 {
 }
 
 // getVendorCommission 返回有效的平台手续费比例：优先使用号商个人设置，否则读取系统默认值。
-func getVendorCommission(ctx context.Context, vendorID int64) float64 {
+func getVendorCommission(_ context.Context, vendorID int64) float64 {
 	rows, _ := db.Engine.QueryString("SELECT commission_ratio FROM vendors WHERE id = $1", vendorID)
 	if len(rows) > 0 && rows[0]["commission_ratio"] != "" {
 		var r float64
@@ -219,7 +222,7 @@ func GetBalance(ctx context.Context, userID int64) (int64, error) {
 // Recharge 为用户增加 credits（管理员操作）。
 // 余额更新已在 WriteTx 内完成，请勿在此处重复更新 DB。
 func Recharge(ctx context.Context, userID, adminID, credits int64) error {
-	return WriteTx(ctx, userID, 0, 0, 0, "", "recharge", credits, 0, nil)
+	return WriteTx(ctx, userID, 0, 0, 0, "", "recharge", credits, 0, 0, nil)
 }
 
 // GrantModelCredit 为用户赠送指定模型的专属积分（管理员操作）。

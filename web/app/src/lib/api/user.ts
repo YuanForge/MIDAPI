@@ -29,6 +29,7 @@ export type UserTransaction = {
   type?: string
   amount?: number
   credits?: number
+  model_credit_charged?: number
   remark?: string
   description?: string
 }

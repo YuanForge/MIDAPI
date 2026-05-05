@@ -392,7 +392,14 @@ export function UserBillingPage() {
                 ) : (
                   txData.items.map((row: any) => (
                     <TableRow key={row.id}>
-                      <TableCell><Badge variant="outline">{txTypeLabel(row.type)}</Badge></TableCell>
+                      <TableCell>
+                        <div className="flex flex-wrap items-center gap-1">
+                          <Badge variant="outline">{txTypeLabel(row.type)}</Badge>
+                          {(row.model_credit_charged > 0) && (
+                            <Badge variant="outline" className="text-xs text-purple-600 border-purple-300">专属积分</Badge>
+                          )}
+                        </div>
+                      </TableCell>
                       <TableCell className={cn("font-medium", txAmtColor(row.type))}>
                         {txSign(row.type)} {formatCredits(Math.abs(row.credits || row.amount || 0))} 积分
                       </TableCell>
