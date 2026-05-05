@@ -35,3 +35,30 @@ func Admin() gin.HandlerFunc {
 		c.Next()
 	}
 }
+
+// AdminOrOperator allows both "admin" and "operator" roles.
+func AdminOrOperator() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if role, exists := c.Get("role"); exists {
+			if role == "admin" || role == "operator" {
+				c.Next()
+				return
+			}
+		}
+
+		userID, exists := c.Get("user_id")
+		if !exists {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "无访问权限"})
+			return
+		}
+
+		user := &model.User{}
+		found, err := db.Engine.Where("id = ?", userID).Cols("role").Get(user)
+		if err != nil || !found || (user.Role != "admin" && user.Role != "operator") {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "需要管理员或运营权限"})
+			return
+		}
+		c.Set("role", user.Role)
+		c.Next()
+	}
+}

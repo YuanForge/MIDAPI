@@ -218,7 +218,7 @@ func ListUsers(c *gin.Context) {
 	}
 
 	var users []model.User
-	total, err := db.Engine.Cols("id", "username", "email", "role", "group", "balance", "is_active", "created_at").
+	total, err := db.Engine.Cols("id", "username", "email", "role", "group", "balance", "is_active", "frozen_reason", "created_at").
 		Desc("id").Limit(size, (page-1)*size).FindAndCount(&users)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -248,6 +248,134 @@ func SetUserGroup(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "group updated"})
 }
 
+// POST /admin/users — 管理员/运营创建用户账号
+func CreateUser(c *gin.Context) {
+	var req struct {
+		Username string `json:"username" binding:"required,min=3,max=32"`
+		Email    string `json:"email" binding:"required,email"`
+		Password string `json:"password" binding:"required,min=8"`
+		Role     string `json:"role"` // 默认 "user"
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	role := req.Role
+	if role == "" {
+		role = "user"
+	}
+	allowedRoles := map[string]bool{"user": true, "agent": true, "admin": true, "operator": true}
+	if !allowedRoles[role] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "角色值无效"})
+		return
+	}
+
+	// 检查邮箱唯一性
+	if exists, _ := db.Engine.Where("email = ?", req.Email).Exist(new(model.User)); exists {
+		c.JSON(http.StatusConflict, gin.H{"error": "该邮箱已被注册"})
+		return
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "密码加密失败"})
+		return
+	}
+	emailVal := req.Email
+	inviteCode := service.GenerateInviteCode()
+	user := &model.User{
+		Username:     req.Username,
+		Email:        &emailVal,
+		PasswordHash: string(hash),
+		Role:         role,
+		IsActive:     true,
+		InviteCode:   inviteCode,
+	}
+	if _, err := db.Engine.Insert(user); err != nil {
+		if isUniqueViolation(err) {
+			c.JSON(http.StatusConflict, gin.H{"error": "用户名或邮箱已被占用"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建失败，请稍后重试"})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"id": user.ID, "username": user.Username, "email": user.Email})
+}
+
+// DELETE /admin/users/:id — 管理员硬删除用户（同时删除其所有 API Key）
+// 仅 admin 角色可操作，operator 无此权限。
+func DeleteUser(c *gin.Context) {
+	// 只允许 admin 删除
+	if role, _ := c.Get("role"); role != "admin" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "仅管理员可删除用户"})
+		return
+	}
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ID 格式错误"})
+		return
+	}
+
+	// 软验证：不允许删除 admin 账户，防止误删
+	target := &model.User{}
+	found, _ := db.Engine.ID(id).Cols("role").Get(target)
+	if !found {
+		c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在"})
+		return
+	}
+	if target.Role == "admin" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "不能删除管理员账户"})
+		return
+	}
+
+	sess := db.Engine.NewSession()
+	defer sess.Close()
+	if err := sess.Begin(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "事务开启失败"})
+		return
+	}
+
+	// 删除该用户的所有 API Key（硬删除）
+	if _, err := sess.Where("user_id = ?", id).Delete(new(model.APIKey)); err != nil {
+		sess.Rollback()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除 API Key 失败"})
+		return
+	}
+	// 硬删除用户
+	if _, err := sess.ID(id).Delete(new(model.User)); err != nil {
+		sess.Rollback()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除用户失败"})
+		return
+	}
+	if err := sess.Commit(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "事务提交失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "用户已删除"})
+}
+
+// isUniqueViolation 判断数据库错误是否为唯一约束冲突。
+func isUniqueViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return contains(msg, "duplicate") || contains(msg, "unique")
+}
+
+func contains(s, sub string) bool {
+	return len(s) >= len(sub) && (s == sub || len(s) > 0 && indexStr(s, sub) >= 0)
+}
+
+func indexStr(s, sub string) int {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
+}
+
 // PATCH /admin/users/:id/freeze — 冻结或解冻账户
 // 冻结后：用户无法登录，其 API Key 也无法使用。
 func FreezeUser(c *gin.Context) {
@@ -257,13 +385,18 @@ func FreezeUser(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Freeze bool `json:"freeze"`
+		Freeze bool   `json:"freeze"`
+		Reason string `json:"reason"` // 冻结原因（解冻时可忽略）
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	affected, err := db.Engine.ID(id).Cols("is_active").Update(&model.User{IsActive: !req.Freeze})
+	reason := ""
+	if req.Freeze {
+		reason = req.Reason
+	}
+	affected, err := db.Engine.ID(id).Cols("is_active", "frozen_reason").Update(&model.User{IsActive: !req.Freeze, FrozenReason: reason})
 	if err != nil || affected == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在"})
 		return

@@ -24,16 +24,32 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// Register 创建新用户（用户名 + 密码，无需邀算验证）。
+// Register 创建新用户（用户名 + 邮箱 + 验证码 + 密码）。
 // inviterID 非 nil 时记录邀请人。
-func Register(ctx context.Context, username, password string, inviterID *int64) (*model.User, error) {
+func Register(ctx context.Context, username, email, emailCode, password string, inviterID *int64) (*model.User, error) {
+	// 验证邮箱验证码
+	if err := VerifyEmailCode(ctx, email, emailCode); err != nil {
+		return nil, err
+	}
+
+	// 检查邮箱唯一性
+	exists, err := db.Engine.Where("email = ?", email).Exist(new(model.User))
+	if err != nil {
+		return nil, fmt.Errorf("注册失败，请稍后重试")
+	}
+	if exists {
+		return nil, fmt.Errorf("该邮箱已被注册")
+	}
+
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return nil, err
 	}
 
+	emailVal := email
 	user := &model.User{
 		Username:     username,
+		Email:        &emailVal,
 		PasswordHash: string(hash),
 		Role:         "user",
 		IsActive:     true,
@@ -43,7 +59,7 @@ func Register(ctx context.Context, username, password string, inviterID *int64) 
 	if _, err := db.Engine.Insert(user); err != nil {
 		log.Printf("[register] db insert error: %v", err)
 		if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "unique") {
-			return nil, fmt.Errorf("用户名已被占用")
+			return nil, fmt.Errorf("用户名或邮箱已被占用")
 		}
 		return nil, fmt.Errorf("注册失败，请稍后重试")
 	}
@@ -57,12 +73,15 @@ func generateInviteCode() string {
 	return hex.EncodeToString(b)
 }
 
+// GenerateInviteCode 导出版，供 handler 层调用。
+func GenerateInviteCode() string { return generateInviteCode() }
+
 // Login 验证用户名或邂算密码，验证成功返回 JWT。
 func Login(ctx context.Context, usernameOrEmail, password string, cfg *config.ServerConfig) (string, *model.User, error) {
 	user := &model.User{}
 	// 先尝试用户名登录，失败再尝试邂算
 	found, err := db.Engine.Where("username = ?", usernameOrEmail).
-		Cols("id", "username", "email", "password_hash", "role", "group", "is_active", "inviter_id").
+		Cols("id", "username", "email", "password_hash", "role", "group", "is_active", "frozen_reason", "inviter_id").
 		Get(user)
 	if err != nil {
 		log.Printf("[login] db error (username lookup): %v", err)
@@ -70,7 +89,7 @@ func Login(ctx context.Context, usernameOrEmail, password string, cfg *config.Se
 	}
 	if !found {
 		found, err = db.Engine.Where("email = ?", usernameOrEmail).
-			Cols("id", "username", "email", "password_hash", "role", "group", "is_active", "inviter_id").
+			Cols("id", "username", "email", "password_hash", "role", "group", "is_active", "frozen_reason", "inviter_id").
 			Get(user)
 		if err != nil {
 			log.Printf("[login] db error (email lookup): %v", err)
@@ -81,7 +100,11 @@ func Login(ctx context.Context, usernameOrEmail, password string, cfg *config.Se
 		}
 	}
 	if !user.IsActive {
-		return "", nil, fmt.Errorf("账号已被禁用，请联系管理员")
+		reason := user.FrozenReason
+		if reason == "" {
+			reason = "请联系管理员"
+		}
+		return "", nil, fmt.Errorf("账号已被冻结：%s", reason)
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
 		return "", nil, fmt.Errorf("用户名或密码错误")

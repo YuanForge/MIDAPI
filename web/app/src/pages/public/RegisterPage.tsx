@@ -16,10 +16,42 @@ export function RegisterPage() {
   const inviteCode = searchParams.get('invite') ?? searchParams.get('code') ?? searchParams.get('ref') ?? ''
   const [form, setForm] = useState({
     username: '',
+    email: '',
+    code: '',
     password: '',
   })
   const [submitting, setSubmitting] = useState(false)
+  const [sendingCode, setSendingCode] = useState(false)
+  const [codeSent, setCodeSent] = useState(false)
+  const [codeCooldown, setCodeCooldown] = useState(0)
   const [error, setError] = useState('')
+
+  async function handleSendCode() {
+    if (!form.email) {
+      setError('请先填写邮箱')
+      return
+    }
+    setSendingCode(true)
+    setError('')
+    try {
+      await authApi.sendCode(form.email)
+      setCodeSent(true)
+      setCodeCooldown(60)
+      const timer = setInterval(() => {
+        setCodeCooldown((prev) => {
+          if (prev <= 1) {
+            clearInterval(timer)
+            return 0
+          }
+          return prev - 1
+        })
+      }, 1000)
+    } catch (err) {
+      setError(getApiErrorMessage(err))
+    } finally {
+      setSendingCode(false)
+    }
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -43,9 +75,6 @@ export function RegisterPage() {
           User sign up
         </p>
         <CardTitle className="text-3xl tracking-tight">创建账号</CardTitle>
-        {/* <p className="text-sm text-muted-foreground">
-          第一阶段保持兼容现有后端注册逻辑，界面按新规范重构。
-        </p> */}
       </CardHeader>
       <CardContent>
         <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
@@ -56,6 +85,42 @@ export function RegisterPage() {
               onChange={(event) =>
                 setForm((current) => ({ ...current, username: event.target.value }))
               }
+            />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label>邮箱</Label>
+            <div className="flex gap-2">
+              <Input
+                type="email"
+                value={form.email}
+                onChange={(event) =>
+                  setForm((current) => ({ ...current, email: event.target.value }))
+                }
+                placeholder="用于账号验证和登录"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                className="shrink-0"
+                onClick={handleSendCode}
+                disabled={sendingCode || codeCooldown > 0}
+              >
+                {sendingCode ? '发送中...' : codeCooldown > 0 ? `${codeCooldown}s` : '获取验证码'}
+              </Button>
+            </div>
+            {codeSent ? (
+              <p className="text-xs text-muted-foreground">验证码已发送到 {form.email}，有效期 5 分钟</p>
+            ) : null}
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label>邮箱验证码</Label>
+            <Input
+              value={form.code}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, code: event.target.value }))
+              }
+              placeholder="请输入收到的 6 位验证码"
+              maxLength={6}
             />
           </div>
           <div className="flex flex-col gap-2">

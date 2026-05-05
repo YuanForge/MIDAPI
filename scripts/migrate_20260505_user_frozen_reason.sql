@@ -1,0 +1,2 @@
+-- 冻结账户原因字段
+ALTER TABLE users ADD COLUMN IF NOT EXISTS frozen_reason TEXT NOT NULL DEFAULT '';

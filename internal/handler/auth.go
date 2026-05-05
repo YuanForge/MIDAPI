@@ -40,10 +40,12 @@ func (h *AuthHandler) SendCode(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "验证码已发送"})
 }
 
-// POST /auth/register — 仅需用户名 + 密码，无需邮箱验证
+// POST /auth/register — 用户名 + 邮箱 + 验证码 + 密码
 func (h *AuthHandler) Register(c *gin.Context) {
 	var req struct {
 		Username   string `json:"username" binding:"required,min=3,max=32"`
+		Email      string `json:"email" binding:"required,email"`
+		Code       string `json:"code" binding:"required"`
 		Password   string `json:"password" binding:"required,min=8"`
 		InviteCode string `json:"invite_code"` // 邀请码（可选）
 		// 广告追踪参数（可选，用于 OCPC 转化上报）
@@ -66,7 +68,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 			inviterQR = inviter.WechatQR
 		}
 	}
-	user, err := service.Register(c.Request.Context(), req.Username, req.Password, inviterID)
+	user, err := service.Register(c.Request.Context(), req.Username, req.Email, req.Code, req.Password, inviterID)
 	if err != nil {
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return

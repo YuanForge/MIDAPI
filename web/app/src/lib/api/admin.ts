@@ -76,6 +76,7 @@ export type AdminUser = {
   balance_credits?: number
   balance?: number
   is_active?: boolean
+  frozen_reason?: string
   rebate_ratio?: number | null
   created_at?: string
 }
@@ -263,8 +264,12 @@ export const adminApi = {
     http.put<Record<string, unknown>>(`/admin/users/${id}/group`, { group }),
   setUserRole: (id: number, role: string) =>
     http.put<Record<string, unknown>>(`/admin/users/${id}/role`, { role }),
-  freezeUser: (id: number, freeze: boolean) =>
-    http.patch<Record<string, unknown>>(`/admin/users/${id}/freeze`, { freeze }),
+  freezeUser: (id: number, freeze: boolean, reason?: string) =>
+    http.patch<Record<string, unknown>>(`/admin/users/${id}/freeze`, { freeze, reason }),
+  createUser: (payload: { username: string; email: string; password: string; role?: string }) =>
+    http.post<{ id?: number; username?: string; email?: string }>('/admin/users', payload),
+  deleteUser: (id: number) =>
+    http.delete<Record<string, unknown>>(`/admin/users/${id}`),
   listTransactions: (params: Record<string, unknown> = {}) =>
     http.get<{ items?: AdminTransaction[]; transactions?: AdminTransaction[]; total?: number; summary?: AdminTransactionSummary } | AdminTransaction[]>(
       '/admin/transactions',

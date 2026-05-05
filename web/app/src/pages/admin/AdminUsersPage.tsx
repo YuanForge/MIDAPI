@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { SaveIcon, UsersIcon } from 'lucide-react'
+import { PlusIcon, SaveIcon, Trash2Icon, UsersIcon } from 'lucide-react'
 
 import { PageHeader } from '@/components/shared/PageHeader'
 import { TableSkeleton } from '@/components/shared/TableSkeleton'
@@ -28,7 +28,7 @@ import {
 import { adminApi, type AdminUser } from '@/lib/api/admin'
 import { useAsync } from '@/hooks/use-async'
 
-type DialogMode = 'recharge' | 'password' | 'group' | 'rebate' | 'model_credit' | null
+type DialogMode = 'recharge' | 'password' | 'group' | 'rebate' | 'model_credit' | 'freeze' | 'create' | 'delete' | null
 
 function fmtBalance(user: AdminUser) {
   const raw = user.balance ?? (user.balance_credits !== undefined ? user.balance_credits * 1e6 : undefined)
@@ -54,6 +54,8 @@ export function AdminUsersPage() {
   const [confirmPwd, setConfirmPwd] = useState('')
   const [rebatePct, setRebatePct] = useState('')
   const [modelName, setModelName] = useState('')
+  const [freezeReason, setFreezeReason] = useState('')
+  const [createForm, setCreateForm] = useState({ username: '', email: '', password: '', role: 'user' })
 
   const error = loadError || mutError
 
@@ -63,6 +65,7 @@ export function AdminUsersPage() {
     setValue(mode === 'group' ? (user.group ?? '') : mode === 'recharge' ? '1000000' : '')
     setConfirmPwd('')
     setModelName('')
+    setFreezeReason('')
     if (mode === 'rebate') {
       const ratio = user.rebate_ratio
       setRebatePct(ratio != null ? String(parseFloat((ratio * 100).toFixed(2))) : '')
@@ -72,10 +75,59 @@ export function AdminUsersPage() {
     setMutError('')
   }
 
+  function openCreate() {
+    setActiveUser(null)
+    setDialogMode('create')
+    setCreateForm({ username: '', email: '', password: '', role: 'user' })
+    setMutError('')
+  }
+
   async function submitDialog() {
+    if (dialogMode === 'create') {
+      if (!createForm.username || !createForm.email || !createForm.password) {
+        setMutError('请填写所有必填字段')
+        return
+      }
+      setMutError('')
+      try {
+        await adminApi.createUser(createForm)
+        setDialogMode(null)
+        reload()
+      } catch (err) {
+        const { getApiErrorMessage } = await import('@/lib/api/http')
+        setMutError(getApiErrorMessage(err))
+      }
+      return
+    }
     if (!activeUser?.id || !dialogMode) return
     if (dialogMode === 'password' && value !== confirmPwd) {
       setMutError('两次密码不一致')
+      return
+    }
+    if (dialogMode === 'freeze') {
+      setMutError('')
+      try {
+        await adminApi.freezeUser(activeUser.id, true, freezeReason)
+        setDialogMode(null)
+        setActiveUser(null)
+        reload()
+      } catch (err) {
+        const { getApiErrorMessage } = await import('@/lib/api/http')
+        setMutError(getApiErrorMessage(err))
+      }
+      return
+    }
+    if (dialogMode === 'delete') {
+      setMutError('')
+      try {
+        await adminApi.deleteUser(activeUser.id)
+        setDialogMode(null)
+        setActiveUser(null)
+        reload()
+      } catch (err) {
+        const { getApiErrorMessage } = await import('@/lib/api/http')
+        setMutError(getApiErrorMessage(err))
+      }
       return
     }
     setMutError('')
@@ -115,12 +167,11 @@ export function AdminUsersPage() {
     }
   }
 
-  async function toggleFreeze(user: AdminUser) {
+  async function unfreeze(user: AdminUser) {
     if (!user.id) return
     setMutError('')
-    const willFreeze = user.is_active !== false ? true : false
     try {
-      await adminApi.freezeUser(user.id, willFreeze)
+      await adminApi.freezeUser(user.id, false)
       reload()
     } catch (err) {
       const { getApiErrorMessage } = await import('@/lib/api/http')
@@ -137,11 +188,17 @@ export function AdminUsersPage() {
         title="用户与余额管理"
         description="查看用户注册状态、余额和手动充值情况，用于日常运营支持。"
         actions={
-          error ? (
-            <Button size="sm" variant="outline" onClick={reload}>
-              重试
+          <div className="flex items-center gap-2">
+            {error ? (
+              <Button size="sm" variant="outline" onClick={reload}>
+                重试
+              </Button>
+            ) : null}
+            <Button size="sm" onClick={openCreate}>
+              <PlusIcon data-icon="inline-start" />
+              创建用户
             </Button>
-          ) : null
+          </div>
         }
       />
       {error ? (
@@ -186,9 +243,16 @@ export function AdminUsersPage() {
                     <TableCell className="font-medium">{row.username ?? '-'}</TableCell>
                     <TableCell className="text-muted-foreground">{row.email ?? '-'}</TableCell>
                     <TableCell>
-                      <Badge variant={(row.is_active ?? true) ? 'default' : 'destructive'} className="text-xs">
-                        {(row.is_active ?? true) ? '正常' : '冻结'}
-                      </Badge>
+                      <div className="flex flex-col gap-0.5">
+                        <Badge variant={(row.is_active ?? true) ? 'default' : 'destructive'} className="text-xs w-fit">
+                          {(row.is_active ?? true) ? '正常' : '冻结'}
+                        </Badge>
+                        {!(row.is_active ?? true) && row.frozen_reason ? (
+                          <span className="text-xs text-muted-foreground max-w-[120px] truncate" title={row.frozen_reason}>
+                            {row.frozen_reason}
+                          </span>
+                        ) : null}
+                      </div>
                     </TableCell>
                     <TableCell>
                       {row.role ? (
@@ -247,9 +311,16 @@ export function AdminUsersPage() {
                         <Button
                           size="sm"
                           variant={(row.is_active ?? true) ? 'outline' : 'default'}
-                          onClick={() => toggleFreeze(row)}
+                          onClick={() => (row.is_active ?? true) ? openDialog(row, 'freeze') : unfreeze(row)}
                         >
                           {(row.is_active ?? true) ? '冻结' : '解冻'}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          onClick={() => openDialog(row, 'delete')}
+                        >
+                          <Trash2Icon className="size-3" />
                         </Button>
                       </div>
                     </TableCell>
@@ -293,10 +364,18 @@ export function AdminUsersPage() {
                     ? '设置返佣比例'
                     : dialogMode === 'model_credit'
                       ? '赠送专属模型积分'
-                      : '设置定价分组'}
+                      : dialogMode === 'freeze'
+                        ? '冻结账户'
+                        : dialogMode === 'delete'
+                          ? '删除用户'
+                          : dialogMode === 'create'
+                            ? '创建用户'
+                            : '设置定价分组'}
             </DialogTitle>
             <DialogDescription>
-              用户：{activeUser?.username ?? activeUser?.email ?? '-'}
+              {dialogMode === 'create'
+                ? '填写新用户信息，将由管理员直接创建账号（无需邮箱验证）。'
+                : `用户：${activeUser?.username ?? activeUser?.email ?? '-'}`}
             </DialogDescription>
           </DialogHeader>
           {mutError ? (
@@ -305,7 +384,50 @@ export function AdminUsersPage() {
             </Alert>
           ) : null}
           <div className="flex flex-col gap-3">
-            {dialogMode === 'model_credit' ? (
+            {dialogMode === 'create' ? (
+              <>
+                <div className="space-y-1.5">
+                  <Label>用户名</Label>
+                  <Input value={createForm.username} onChange={(e) => setCreateForm(f => ({ ...f, username: e.target.value }))} placeholder="3-32 位字符" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>邮箱</Label>
+                  <Input type="email" value={createForm.email} onChange={(e) => setCreateForm(f => ({ ...f, email: e.target.value }))} placeholder="唯一，用于登录" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>密码</Label>
+                  <Input type="password" value={createForm.password} onChange={(e) => setCreateForm(f => ({ ...f, password: e.target.value }))} placeholder="至少 8 位" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>角色</Label>
+                  <select
+                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    value={createForm.role}
+                    onChange={(e) => setCreateForm(f => ({ ...f, role: e.target.value }))}
+                  >
+                    <option value="user">user（普通用户）</option>
+                    <option value="agent">agent（客服）</option>
+                    <option value="operator">operator（运营）</option>
+                    <option value="admin">admin（管理员）</option>
+                  </select>
+                </div>
+              </>
+            ) : dialogMode === 'freeze' ? (
+              <div className="space-y-1.5">
+                <Label>冻结原因</Label>
+                <Input
+                  value={freezeReason}
+                  onChange={(e) => setFreezeReason(e.target.value)}
+                  placeholder="请输入冻结原因，用户登录时将看到此信息"
+                />
+                <p className="text-xs text-muted-foreground">冻结后用户无法登录，其 API Key 也无法使用。</p>
+              </div>
+            ) : dialogMode === 'delete' ? (
+              <div className="rounded-md bg-destructive/10 border border-destructive/30 p-4 text-sm text-destructive space-y-1">
+                <p className="font-medium">确定要永久删除用户 <strong>{activeUser?.username}</strong> 吗？</p>
+                <p>此操作不可恢复，用户的所有 API Key 将同时被删除。</p>
+              </div>
+            ) : dialogMode === 'model_credit' ? (
               <>
                 <div className="space-y-1.5">
                   <Label>模型名称（routing key）</Label>
@@ -395,9 +517,12 @@ export function AdminUsersPage() {
             <Button variant="outline" onClick={() => setDialogMode(null)}>
               取消
             </Button>
-            <Button onClick={submitDialog}>
-              <SaveIcon data-icon="inline-start" />
-              确认
+            <Button
+              variant={dialogMode === 'delete' ? 'destructive' : 'default'}
+              onClick={submitDialog}
+            >
+              {dialogMode !== 'delete' ? <SaveIcon data-icon="inline-start" /> : <Trash2Icon data-icon="inline-start" />}
+              {dialogMode === 'delete' ? '确认删除' : dialogMode === 'freeze' ? '确认冻结' : '确认'}
             </Button>
           </DialogFooter>
         </DialogContent>

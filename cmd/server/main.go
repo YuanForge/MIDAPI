@@ -186,6 +186,8 @@ func main() {
 			admin.PATCH("/pool-keys/:id", handler.UpdatePoolKey)
 			admin.PATCH("/pool-keys/:id/vendor", handler.AdminSetPoolKeyVendor)
 			admin.GET("/users", handler.ListUsers)
+			admin.POST("/users", handler.CreateUser)
+			admin.DELETE("/users/:id", handler.DeleteUser)
 			admin.POST("/users/:id/recharge", handler.Recharge)
 			admin.POST("/users/:id/model-credits", handler.GrantModelCredit)
 			admin.GET("/users/:id/model-credits", handler.AdminListModelCredits)

@@ -164,9 +164,9 @@ func SetUserRole(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	allowed := map[string]bool{"user": true, "agent": true, "admin": true}
+	allowed := map[string]bool{"user": true, "agent": true, "admin": true, "operator": true}
 	if !allowed[req.Role] {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "角色值无效，允许: user / agent / admin"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "角色值无效，允许: user / agent / admin / operator"})
 		return
 	}
 	if _, err := db.Engine.ID(targetID).Cols("role").Update(&model.User{Role: req.Role}); err != nil {
