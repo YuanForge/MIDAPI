@@ -53,6 +53,22 @@ function normalizeImageSrc(value: unknown) {
   return `data:${detectBase64ImageMime(compact)};base64,${compact}`
 }
 
+function openImageUrl(url: string) {
+  if (url.startsWith('data:')) {
+    const [header, base64] = url.split(',')
+    const mime = header.replace('data:', '').replace(';base64', '')
+    const bytes = atob(base64)
+    const arr = new Uint8Array(bytes.length)
+    for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i)
+    const blob = new Blob([arr], { type: mime })
+    const blobUrl = URL.createObjectURL(blob)
+    const win = window.open(blobUrl, '_blank')
+    if (win) win.addEventListener('unload', () => URL.revokeObjectURL(blobUrl))
+  } else {
+    window.open(url, '_blank', 'noopener,noreferrer')
+  }
+}
+
 function collectImageSources(...values: unknown[]) {
   const sources: string[] = []
 
@@ -409,7 +425,7 @@ export function UserImageGenPage() {
             {images.length > 0 ? (
               <div className="grid gap-4 md:grid-cols-2">
                 {images.map((url, index) => (
-                  <a key={`${index}-${url.slice(0, 64)}`} href={url} target="_blank" rel="noopener noreferrer">
+                  <a key={`${index}-${url.slice(0, 64)}`} href="#" onClick={(e) => { e.preventDefault(); openImageUrl(url) }}>
                     <img className="rounded-xl border border-border/70 w-full" src={url} alt="generated" />
                   </a>
                 ))}
@@ -437,10 +453,9 @@ export function UserImageGenPage() {
                   return (
                     <a
                       key={task.task_id ?? task.id}
-                      href={imgUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                      href="#"
                       className="group relative block overflow-hidden rounded-lg border border-border/50"
+                      onClick={(e) => { e.preventDefault(); openImageUrl(imgUrl) }}
                     >
                       <img src={imgUrl} alt={prompt} className="aspect-square w-full object-cover" loading="lazy" />
                       <div className="absolute inset-0 flex flex-col justify-end bg-gradient-to-t from-black/70 via-black/20 to-transparent p-1.5 opacity-0 transition-opacity group-hover:opacity-100">
