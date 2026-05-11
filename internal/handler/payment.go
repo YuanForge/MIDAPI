@@ -180,13 +180,18 @@ func EpayCallback(c *gin.Context) {
 		return
 	}
 
-	// 更新订单状态
+	// 原子更新订单状态：仅当 status='pending' 时才成功，防止并发回调双重充値
 	now := time.Now()
 	order.Status = "paid"
 	order.TradeNo = tradeNo
 	order.PaidAt = &now
-	if _, err := db.Engine.ID(order.ID).Cols("status", "trade_no", "paid_at").Update(order); err != nil {
+	affected, err := db.Engine.ID(order.ID).Where("status = 'pending'").Cols("status", "trade_no", "paid_at").Update(order)
+	if err != nil {
 		c.String(http.StatusOK, "fail")
+		return
+	}
+	if affected == 0 {
+		c.String(http.StatusOK, "success") // 并发处理，已完成，幂等返回
 		return
 	}
 
@@ -347,13 +352,12 @@ func CreatePayApplyOrder(c *gin.Context) {
 			PayFrom:    req.PayFrom,
 			ProName:    proName,
 		}
-		id, err := db.Engine.Insert(order)
-		if err != nil {
+		if _, err := db.Engine.Insert(order); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建订单失败: " + err.Error()})
 			return
 		}
 		outTradeNo = tradeNo
-		orderID = id
+		orderID = order.ID
 	}
 
 	// 获取客户端 IP

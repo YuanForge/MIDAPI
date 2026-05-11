@@ -293,6 +293,9 @@ func AdminListAPIKeys(c *gin.Context) {
 	if page < 1 {
 		page = 1
 	}
+	if size <= 0 || size > 200 {
+		size = 20
+	}
 	status := c.Query("status") // active/inactive/revoked
 	userID := c.Query("user_id")
 
@@ -598,9 +601,9 @@ func ListAuditLogs(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"logs": logs, "total": total})
 }
 
-// helper：从 context 取管理员 ID（middleware 应注入）
+// helper：从 context 取管理员 ID（middleware 注入 "user_id"）
 func getAdminID(c *gin.Context) int64 {
-	if v, ok := c.Get("admin_id"); ok {
+	if v, ok := c.Get("user_id"); ok {
 		if id, ok := v.(int64); ok {
 			return id
 		}
@@ -986,6 +989,7 @@ func GetAdminMe(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"user_id":     user.ID,
 		"username":    user.Username,
+		"email":       user.Email,
 		"role":        user.Role,
 		"permissions": perms,
 	})
@@ -1041,9 +1045,15 @@ func UpdateRole(c *gin.Context) {
 		return
 	}
 	var r model.AdminRole
-	c.ShouldBindJSON(&r)
+	if err := c.ShouldBindJSON(&r); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	r.ID = id
-	db.Engine.ID(id).Cols("label", "permissions").Update(&r)
+	if _, err := db.Engine.ID(id).Cols("label", "permissions").Update(&r); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -1054,6 +1064,18 @@ func DeleteRole(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "ID 格式错误"})
 		return
 	}
+	// 内置角色不允许删除
+	var r model.AdminRole
+	if found, _ := db.Engine.ID(id).Cols("is_builtin").Get(&r); !found {
+		c.JSON(http.StatusNotFound, gin.H{"error": "角色不存在"})
+		return
+	}
+	if r.IsBuiltin {
+		c.JSON(http.StatusForbidden, gin.H{"error": "内置角色不允许删除"})
+		return
+	}
+	// 先清理绑定关系，再删除角色，避免孤儿数据
+	db.Engine.Where("role_id = ?", id).Delete(&model.AdminUserRole{})
 	db.Engine.Delete(&model.AdminRole{ID: id})
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
@@ -1161,9 +1183,27 @@ func SetAdminRoles(c *gin.Context) {
 	}
 
 	// 在事务内全量替换：先删全部旧绑定，再逐条插入
-	db.Engine.Delete(&model.AdminUserRole{}, "admin_id = ?", adminID)
+	sess := db.Engine.NewSession()
+	defer sess.Close()
+	if err := sess.Begin(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "事务开启失败"})
+		return
+	}
+	if _, err := sess.Where("admin_id = ?", adminID).Delete(&model.AdminUserRole{}); err != nil {
+		_ = sess.Rollback()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 	for _, rid := range req.RoleIDs {
-		db.Engine.Insert(&model.AdminUserRole{AdminID: adminID, RoleID: rid})
+		if _, err := sess.Insert(&model.AdminUserRole{AdminID: adminID, RoleID: rid}); err != nil {
+			_ = sess.Rollback()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	if err := sess.Commit(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"ok": true})

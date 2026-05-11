@@ -81,6 +81,8 @@ export function AdminCardsPage() {
   const [note, setNote] = useState('')
   const [vendorId, setVendorId] = useState<string>('')
   const [pendingDeleteCard, setPendingDeleteCard] = useState<AdminCard | undefined>()
+  const [pendingVoidCardId, setPendingVoidCardId] = useState<number | null>(null)
+  const [pendingVoidBatchId, setPendingVoidBatchId] = useState<string | null>(null)
 
   const { data: vendors } = useAsync(async () => {
     const res = await adminApi.listVendors({})
@@ -109,20 +111,32 @@ export function AdminCardsPage() {
   }
 
   async function handleVoidCard(id: number) {
+    setPendingVoidCardId(id)
+  }
+
+  async function executeVoidCard() {
+    if (pendingVoidCardId == null) return
     setMutError('')
     try {
-      await adminApi.voidCard(id)
+      await adminApi.voidCard(pendingVoidCardId)
       reload()
     } catch (err) {
       const { getApiErrorMessage } = await import('@/lib/api/http')
       setMutError(getApiErrorMessage(err))
+    } finally {
+      setPendingVoidCardId(null)
     }
   }
 
   async function handleVoidBatch(batchId: string) {
+    setPendingVoidBatchId(batchId)
+  }
+
+  async function executeVoidBatch() {
+    if (!pendingVoidBatchId) return
     setMutError('')
     try {
-      const res = await adminApi.voidCardBatch(batchId)
+      const res = await adminApi.voidCardBatch(pendingVoidBatchId)
       const voided = (res as { voided?: number }).voided ?? 0
       window.alert(`已作废 ${voided} 张未使用卡密`)
       reloadBatches()
@@ -130,6 +144,8 @@ export function AdminCardsPage() {
     } catch (err) {
       const { getApiErrorMessage } = await import('@/lib/api/http')
       setMutError(getApiErrorMessage(err))
+    } finally {
+      setPendingVoidBatchId(null)
     }
   }
 
@@ -308,8 +324,8 @@ export function AdminCardsPage() {
                     >{row.code ?? '-'}</TableCell>
                     <TableCell>¥{((row.credits ?? 0) / 1_000_000).toFixed(4)}</TableCell>
                     <TableCell>
-                      <Badge variant={row.status === 'unused' ? 'default' : 'secondary'}>
-                        {row.status === 'unused' ? '未使用' : '已使用'}
+                      <Badge variant={row.status === 'unused' ? 'default' : row.status === 'voided' ? 'destructive' : 'secondary'}>
+                        {row.status === 'unused' ? '未使用' : row.status === 'voided' ? '已作废' : '已使用'}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-muted-foreground">{row.note ?? '-'}</TableCell>
@@ -489,6 +505,36 @@ export function AdminCardsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={pendingVoidCardId != null} onOpenChange={() => setPendingVoidCardId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认作废</AlertDialogTitle>
+            <AlertDialogDescription>
+              确认作废此卡密吗？作废后该卡密将无法使用，此操作不可撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={executeVoidCard}>确认作废</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={pendingVoidBatchId != null} onOpenChange={() => setPendingVoidBatchId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认批量作废</AlertDialogTitle>
+            <AlertDialogDescription>
+              确认作废该批次所有未使用卡密吗？作废后该批次未使用卡密将全部失效，此操作不可撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={executeVoidBatch}>确认作废</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   )
 }

@@ -5,6 +5,16 @@ import { PageHeader } from '@/components/shared/PageHeader'
 import { TableEmpty } from '@/components/shared/TableEmpty'
 import { TableSkeleton } from '@/components/shared/TableSkeleton'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -35,16 +45,20 @@ export function AdminApiKeysPage() {
   }, { keys: [] as AdminAPIKey[], total: 0 }, [page, filterEmail, filterUserId])
 
   const [mutError, setMutError] = useState('')
+  const [pendingRevokeId, setPendingRevokeId] = useState<number | null>(null)
   const totalPages = Math.ceil(data.total / pageSize)
 
-  async function handleRevoke(id: number) {
+  async function executeRevoke() {
+    if (pendingRevokeId == null) return
     setMutError('')
     try {
-      await adminApi.revokeApiKey(id)
+      await adminApi.revokeApiKey(pendingRevokeId)
       reload()
     } catch (err) {
       const { getApiErrorMessage } = await import('@/lib/api/http')
       setMutError(getApiErrorMessage(err))
+    } finally {
+      setPendingRevokeId(null)
     }
   }
 
@@ -125,7 +139,7 @@ export function AdminApiKeysPage() {
                   </TableCell>
                   <TableCell className="text-right">
                     {k.is_active && k.id != null ? (
-                      <Button size="sm" variant="destructive" onClick={() => handleRevoke(k.id!)}>
+                      <Button size="sm" variant="destructive" onClick={() => setPendingRevokeId(k.id!)}>
                         <BanIcon className="mr-1 size-3.5" />吊销
                       </Button>
                     ) : null}
@@ -146,6 +160,21 @@ export function AdminApiKeysPage() {
           </CardContent>
         ) : null}
       </Card>
+
+      <AlertDialog open={pendingRevokeId != null} onOpenChange={() => setPendingRevokeId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认吊销</AlertDialogTitle>
+            <AlertDialogDescription>
+              确认吊销此 API Key 吗？吊销后该 Key 将立即失效，无法撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={executeRevoke}>确认吊销</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   )
 }

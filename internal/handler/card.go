@@ -48,7 +48,7 @@ func GenerateCards(c *gin.Context) {
 		})
 	}
 	if _, err := db.Engine.Insert(&cards); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成卡密失败，请稍后重试"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"cards": cards, "count": len(cards)})
@@ -74,7 +74,7 @@ func ListCards(c *gin.Context) {
 	var cards []model.Card
 	total, err := sess.Limit(size, (page-1)*size).FindAndCount(&cards)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败，请稍后重试"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"cards": cards, "total": total})
@@ -96,7 +96,10 @@ func DeleteCard(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "只能删除未使用的卡密"})
 		return
 	}
-	db.Engine.ID(id).Delete(new(model.Card))
+	if _, err := db.Engine.ID(id).Delete(new(model.Card)); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败，请稍后重试"})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"message": "卡密已删除"})
 }
 
@@ -137,7 +140,11 @@ func RedeemCard(c *gin.Context) {
 	// 写充值流水并加余额
 	corrID := fmt.Sprintf("card-%d-%d", card.ID, userID)
 	if err := service.WriteTx(c.Request.Context(), userID, 0, 0, 0, corrID, "recharge", card.Credits, 0, 0, nil); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新余额失败: " + err.Error()})
+		// 回滚卡密状态，让用户可以重试
+		db.Engine.Where("id = ? AND status = 'used' AND used_by = ?", card.ID, userID).
+			Cols("status", "used_by", "used_at").
+			Update(&model.Card{Status: "unused"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "充值失败，卡密已自动恢复，请重试"})
 		return
 	}
 

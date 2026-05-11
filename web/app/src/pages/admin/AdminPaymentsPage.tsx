@@ -116,7 +116,7 @@ export function AdminPaymentsPage() {
                   </TableCell>
                   <TableCell className="font-mono text-xs">{row.out_trade_no}</TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">{row.trade_no || '-'}</TableCell>
-                  <TableCell className="text-right font-mono">¥{((row.amount ?? 0) / 100).toFixed(2)}</TableCell>
+                  <TableCell className="text-right font-mono">¥{(row.amount ?? 0).toFixed(2)}</TableCell>
                   <TableCell className="text-right font-mono">¥{((row.credits ?? 0) / 1e6).toFixed(2)}</TableCell>
                   <TableCell>{statusBadge(row.status)}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">

@@ -51,13 +51,21 @@ func WriteTx(ctx context.Context, userID, channelID, apiKeyID, poolKeyID int64, 
 		delta = generalCredits
 	}
 
+	// 将余额更新与流水插入包在同一事务，避免余额已改但流水缺失
+	sess := db.Engine.NewSession()
+	defer sess.Close()
+	if err := sess.Begin(); err != nil {
+		return err
+	}
+
 	if delta != 0 {
 		// 单条 SQL 内原子地更新并返回新余额，用于审计日志。
-		rows, err := db.Engine.QueryString(
+		rows, err := sess.QueryString(
 			"UPDATE users SET balance = balance + $1 WHERE id = $2 RETURNING balance",
 			delta, userID,
 		)
 		if err != nil {
+			_ = sess.Rollback()
 			return err
 		}
 		if len(rows) > 0 {
@@ -67,7 +75,12 @@ func WriteTx(ctx context.Context, userID, channelID, apiKeyID, poolKeyID int64, 
 		}
 	}
 
-	if _, err := db.Engine.Insert(tx); err != nil {
+	if _, err := sess.Insert(tx); err != nil {
+		_ = sess.Rollback()
+		return err
+	}
+
+	if err := sess.Commit(); err != nil {
 		return err
 	}
 

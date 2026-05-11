@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"fanapi/internal/db"
 	"fanapi/internal/model"
@@ -61,8 +62,8 @@ func UpdateOcpcPlatform(c *gin.Context) {
 		return
 	}
 	p.ID = id
-	// 若 secret 末尾含 *** 则说明前端未修改，从 DB 取原值
-	if len(p.E360Secret) > 0 && len(p.E360Secret) < 12 && p.E360Secret[len(p.E360Secret)-6:] == "******" {
+	// 若 secret 末尾含 ****** 则说明前端回传了脱敏值，从 DB 取原值
+	if strings.HasSuffix(p.E360Secret, "******") {
 		orig := &model.OcpcPlatform{}
 		if found, _ := db.Engine.ID(id).Get(orig); found {
 			p.E360Secret = orig.E360Secret

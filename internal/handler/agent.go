@@ -137,7 +137,7 @@ func AgentRecharge(c *gin.Context) {
 func AgentUpdateWechatQR(c *gin.Context) {
 	agentID := c.MustGet("user_id").(int64)
 	var req struct {
-		WechatQR string `json:"wechat_qr" binding:"required"`
+		WechatQR string `json:"wechat_qr" binding:"required,max=2048"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

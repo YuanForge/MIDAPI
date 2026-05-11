@@ -40,7 +40,7 @@ import { useAsync } from '@/hooks/use-async'
 type DialogMode = 'recharge' | 'password' | 'group' | 'rebate' | 'model_credit' | 'freeze' | 'create' | 'delete' | 'detail' | 'batch_group' | 'batch_freeze' | null
 
 function fmtBalance(user: AdminUser) {
-  const raw = user.balance ?? (user.balance_credits !== undefined ? user.balance_credits * 1e6 : undefined)
+  const raw = user.balance
   if (raw === undefined || raw === null) return '-'
   return `¥${(Number(raw) / 1e6).toFixed(4)}`
 }

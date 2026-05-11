@@ -46,7 +46,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		Username   string `json:"username" binding:"required,min=3,max=32"`
 		Email      string `json:"email" binding:"required,email"`
 		Code       string `json:"code" binding:"required"`
-		Password   string `json:"password" binding:"required,min=8"`
+		Password   string `json:"password" binding:"required,min=8,max=128"`
 		InviteCode string `json:"invite_code"` // 邀请码（可选）
 		// 广告追踪参数（可选，用于 OCPC 转化上报）
 		PlatformID int64  `json:"platform_id"` // ocpc_platforms.id（落地页 URL 中的 ocpc_id）
@@ -186,7 +186,7 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 	var req struct {
 		Email    string `json:"email" binding:"required,email"`
 		Code     string `json:"code" binding:"required"`
-		Password string `json:"password" binding:"required,min=8"`
+		Password string `json:"password" binding:"required,min=8,max=128"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -202,7 +202,7 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 // POST /user/apikeys  (requires auth)
 func (h *AuthHandler) CreateAPIKey(c *gin.Context) {
 	var req struct {
-		Name    string `json:"name" binding:"required"`
+		Name    string `json:"name" binding:"required,max=64"`
 		KeyType string `json:"key_type"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -632,7 +632,7 @@ func (h *AuthHandler) ListAPIKeys(c *gin.Context) {
 func (h *AuthHandler) ChangePassword(c *gin.Context) {
 	userID := c.MustGet("user_id").(int64)
 	var req struct {
-		NewPassword string `json:"new_password" binding:"required,min=8"`
+		NewPassword string `json:"new_password" binding:"required,min=8,max=128"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

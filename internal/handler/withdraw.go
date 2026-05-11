@@ -207,17 +207,27 @@ func AdminApproveWithdrawal(c *gin.Context) {
 		return
 	}
 
+	// 包裹在事务中：扣减冻结余额 + 更新申请状态
+	sess := db.Engine.NewSession()
+	defer sess.Close()
+	if err := sess.Begin(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "事务开启失败"})
+		return
+	}
+
 	// 原子扣减冻结余额
-	n, err := db.Engine.Exec(
+	n, err := sess.Exec(
 		"UPDATE users SET frozen_balance = frozen_balance - $1 WHERE id = $2 AND frozen_balance >= $1",
 		record.Amount, record.UserID,
 	)
 	if err != nil {
+		_ = sess.Rollback()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "扣减积分失败"})
 		return
 	}
 	affected, _ := n.RowsAffected()
 	if affected == 0 {
+		_ = sess.Rollback()
 		c.JSON(http.StatusConflict, gin.H{"error": "用户冻结积分不足，无法划扣"})
 		return
 	}
@@ -229,10 +239,13 @@ func AdminApproveWithdrawal(c *gin.Context) {
 	record.AdminRemark = req.Remark
 	record.FinanceReviewerID = adminID
 	record.FinanceReviewedAt = &now
-	if _, err := db.Engine.ID(id).Cols("status", "admin_remark", "review_stage", "finance_reviewer_id", "finance_reviewed_at").Update(&record); err != nil {
-		// 回滚冻结余额
-		db.Engine.Exec("UPDATE users SET frozen_balance = frozen_balance + $1 WHERE id = $2", record.Amount, record.UserID) //nolint:errcheck
+	if _, err := sess.ID(id).Cols("status", "admin_remark", "review_stage", "finance_reviewer_id", "finance_reviewed_at").Update(&record); err != nil {
+		_ = sess.Rollback()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新状态失败"})
+		return
+	}
+	if err := sess.Commit(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "事务提交失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})

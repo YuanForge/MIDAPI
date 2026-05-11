@@ -22,7 +22,7 @@ type WithdrawRequest struct {
 	UpdatedAt         time.Time  `xorm:"updated 'updated_at'" json:"updated_at"`
 
 	// 关联字段（查询时 JOIN 填充，不入库）
-	Username string `xorm:"-" json:"username,omitempty"`
+	Username string `xorm:"username" json:"username,omitempty"`
 }
 
 func (*WithdrawRequest) TableName() string { return "withdraw_requests" }

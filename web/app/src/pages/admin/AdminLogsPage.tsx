@@ -83,8 +83,8 @@ export function AdminLogsPage() {
     if (filters.channel_id) params.channel_id = filters.channel_id
     if (filters.status) params.status = filters.status
     if (filters.corr_id) params.corr_id = filters.corr_id
-    if (filters.startAt) params.start_at = new Date(filters.startAt).getTime()
-    if (filters.endAt) params.end_at = new Date(filters.endAt).getTime()
+    if (filters.startAt) params.start_at = new Date(filters.startAt).toISOString()
+    if (filters.endAt) params.end_at = new Date(filters.endAt).toISOString()
 
     const res = await adminApi.listLogs(params)
     return {

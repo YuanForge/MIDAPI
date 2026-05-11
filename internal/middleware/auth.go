@@ -81,9 +81,22 @@ func Auth(cfg *config.ServerConfig) gin.HandlerFunc {
 				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "登录凭证异常，请重新登录"})
 				return
 			}
-			userID := int64(claims["sub"].(float64))
+			sub, ok := claims["sub"].(float64)
+			if !ok {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "登录凭证异常，请重新登录"})
+				return
+			}
+			userID := int64(sub)
 			role, _ := claims["role"].(string)
 			group, _ := claims["group"].(string)
+			// 检查账户冻结状态（与 API Key 路径对称）
+			{
+				user := &model.User{}
+				if found, _ := db.Engine.ID(userID).Cols("is_active").Get(user); found && !user.IsActive {
+					c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "账户已被冻结，请联系管理员"})
+					return
+				}
+			}
 			c.Set("user_id", userID)
 			c.Set("role", role)
 			c.Set("user_group", group)

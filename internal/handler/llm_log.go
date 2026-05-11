@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"fanapi/internal/db"
 	"fanapi/internal/model"
@@ -104,17 +106,19 @@ func AdminListLLMLogs(c *gin.Context) {
 			Cost    int64  `xorm:"cost"`
 			PoolKey int64  `xorm:"pool_key_id"`
 		}
-		inList := "'" + logs[0].CorrID + "'"
-		for _, l := range logs[1:] {
-			inList += ",'" + l.CorrID + "'"
+		placeholders := make([]string, len(logs))
+		args := make([]interface{}, len(logs))
+		for i, l := range logs {
+			placeholders[i] = fmt.Sprintf("$%d", i+1)
+			args[i] = l.CorrID
 		}
 		sqlStr := `SELECT corr_id,
 			COALESCE(SUM(CASE WHEN type IN ('hold','charge','settle') THEN credits WHEN type='refund' THEN -credits ELSE 0 END),0) AS credits,
 			COALESCE(SUM(CASE WHEN type IN ('hold','charge','settle') THEN cost    WHEN type='refund' THEN -cost    ELSE 0 END),0) AS cost,
 			COALESCE(MAX(pool_key_id), 0) AS pool_key_id
-			FROM billing_transactions WHERE corr_id IN (` + inList + `) GROUP BY corr_id`
+			FROM billing_transactions WHERE corr_id IN (` + strings.Join(placeholders, ",") + `) GROUP BY corr_id`
 		var rows []txRow
-		_ = db.Engine.SQL(sqlStr).Find(&rows)
+		_ = db.Engine.SQL(sqlStr, args...).Find(&rows)
 		for _, r := range rows {
 			creditsMap[r.CorrID] = r.Credits
 			costMap[r.CorrID] = r.Cost
@@ -290,25 +294,21 @@ func UserListLLMLogs(c *gin.Context) {
 	// 查询每条日志对应的净扣费积分（hold/charge/settle 扣除 refund 后的实际消耗）
 	creditsMap := map[string]int64{}
 	if len(logs) > 0 {
-		corrIDs := make([]interface{}, len(logs))
-		placeholders := make([]string, len(logs))
-		for i, l := range logs {
-			corrIDs[i] = l.CorrID
-			placeholders[i] = "?" // xorm 用 ? 占位
-		}
 		type txRow struct {
 			CorrID  string `xorm:"corr_id"`
 			Credits int64  `xorm:"credits"`
 		}
 		var rows []txRow
-		inList := "'" + logs[0].CorrID + "'"
-		for _, l := range logs[1:] {
-			inList += ",'" + l.CorrID + "'"
+		placeholders2 := make([]string, len(logs))
+		args2 := make([]interface{}, len(logs))
+		for i, l := range logs {
+			placeholders2[i] = fmt.Sprintf("$%d", i+1)
+			args2[i] = l.CorrID
 		}
-		sqlStr := `SELECT corr_id,
+		sqlStr2 := `SELECT corr_id,
 			COALESCE(SUM(CASE WHEN type IN ('hold','charge','settle') THEN credits WHEN type='refund' THEN -credits ELSE 0 END),0) AS credits
-			FROM billing_transactions WHERE corr_id IN (` + inList + `) GROUP BY corr_id`
-		_ = db.Engine.SQL(sqlStr).Find(&rows)
+			FROM billing_transactions WHERE corr_id IN (` + strings.Join(placeholders2, ",") + `) GROUP BY corr_id`
+		_ = db.Engine.SQL(sqlStr2, args2...).Find(&rows)
 		for _, r := range rows {
 			creditsMap[r.CorrID] = r.Credits
 		}

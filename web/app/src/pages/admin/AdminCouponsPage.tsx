@@ -5,6 +5,16 @@ import { PageHeader } from '@/components/shared/PageHeader'
 import { TableEmpty } from '@/components/shared/TableEmpty'
 import { TableSkeleton } from '@/components/shared/TableSkeleton'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -31,7 +41,7 @@ import { adminApi, type AdminCoupon } from '@/lib/api/admin'
 import { useAsync } from '@/hooks/use-async'
 
 function discountLabel(c: AdminCoupon) {
-  if (c.discount_type === 'percent') return `${(c.discount_value ?? 0)}% 折扣`
+  if (c.discount_type === 'percent') return `${((c.discount_value ?? 0) / 100)}% 折扣`
   return `减 ¥${((c.discount_value ?? 0) / 100).toFixed(2)}`
 }
 
@@ -50,6 +60,7 @@ export function AdminCouponsPage() {
   const [selectedCoupon, setSelectedCoupon] = useState<AdminCoupon | null>(null)
   const [uses, setUses] = useState<{ id?: number; coupon_id?: number; user_id?: number; discount?: number; created_at?: string }[]>([])
   const [usesLoading, setUsesLoading] = useState(false)
+  const [pendingVoidId, setPendingVoidId] = useState<number | null>(null)
 
   async function openUses(coupon: AdminCoupon) {
     if (!coupon.id) return
@@ -94,13 +105,20 @@ export function AdminCouponsPage() {
   }
 
   async function handleVoid(id: number) {
+    setPendingVoidId(id)
+  }
+
+  async function executeVoid() {
+    if (pendingVoidId == null) return
     setMutError('')
     try {
-      await adminApi.voidCoupon(id)
+      await adminApi.voidCoupon(pendingVoidId)
       reload()
     } catch (err) {
       const { getApiErrorMessage } = await import('@/lib/api/http')
       setMutError(getApiErrorMessage(err))
+    } finally {
+      setPendingVoidId(null)
     }
   }
 
@@ -284,6 +302,21 @@ export function AdminCouponsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={pendingVoidId != null} onOpenChange={() => setPendingVoidId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认作废</AlertDialogTitle>
+            <AlertDialogDescription>
+              确认作废此优惠券吗？作废后持有该优惠码的用户将无法使用，此操作不可撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={executeVoid}>确认作废</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   )
 }

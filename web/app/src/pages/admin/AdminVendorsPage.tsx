@@ -5,6 +5,16 @@ import { PageHeader } from '@/components/shared/PageHeader'
 import { TableEmpty } from '@/components/shared/TableEmpty'
 import { TableSkeleton } from '@/components/shared/TableSkeleton'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -38,20 +48,23 @@ export function AdminVendorsPage() {
   const [mutError, setMutError] = useState('')
   const [editing, setEditing] = useState<AdminVendor | null>(null)
   const [commissionPct, setCommissionPct] = useState('')
+  const [pendingToggle, setPendingToggle] = useState<AdminVendor | null>(null)
 
   const error = loadError || mutError
 
-  async function toggleActive(row: AdminVendor) {
-    if (!row.id) return
+  async function executeToggle() {
+    if (!pendingToggle?.id) return
     setMutError('')
     try {
-      await adminApi.updateVendor(row.id, {
-        is_active: !(row.is_active ?? row.enabled ?? true),
+      await adminApi.updateVendor(pendingToggle.id, {
+        is_active: !(pendingToggle.is_active ?? pendingToggle.enabled ?? true),
       })
       reload()
     } catch (err) {
       const { getApiErrorMessage } = await import('@/lib/api/http')
       setMutError(getApiErrorMessage(err))
+    } finally {
+      setPendingToggle(null)
     }
   }
 
@@ -152,7 +165,7 @@ export function AdminVendorsPage() {
                         <Button size="sm" variant="outline" onClick={() => openEdit(row)}>
                           编辑
                         </Button>
-                        <Button size="sm" onClick={() => toggleActive(row)}>
+                        <Button size="sm" onClick={() => setPendingToggle(row)}>
                           {(row.is_active ?? row.enabled ?? true) ? '禁用' : '启用'}
                         </Button>
                       </div>
@@ -194,6 +207,21 @@ export function AdminVendorsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={pendingToggle != null} onOpenChange={() => setPendingToggle(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认{(pendingToggle?.is_active ?? pendingToggle?.enabled ?? true) ? '禁用' : '启用'}</AlertDialogTitle>
+            <AlertDialogDescription>
+              确认{(pendingToggle?.is_active ?? pendingToggle?.enabled ?? true) ? '禁用' : '启用'}号商「{pendingToggle?.username ?? pendingToggle?.email ?? '-'}」吗？
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={executeToggle}>确认</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   )
 }
