@@ -25,7 +25,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
+import { ImageUpload } from '@/components/ui/image-upload'
 import { Label } from '@/components/ui/label'
 import {
   Select,
@@ -68,8 +68,8 @@ function payTypeBadge(t: string | undefined) {
 
 export function AdminWithdrawPage() {
   const [page, setPage] = useState(1)
-  const [statusFilter, setStatusFilter] = useState('pending')
-  const [queryParams, setQueryParams] = useState({ page: 1, size: 20, status: 'pending' })
+  const [statusFilter, setStatusFilter] = useState('') // 默认全部
+  const [queryParams, setQueryParams] = useState({ page: 1, size: 20, status: '' })
 
   const { data, loading, error: loadError, reload } = useAsync(async () => {
     const [listRes, countRes] = await Promise.all([
@@ -210,6 +210,7 @@ export function AdminWithdrawPage() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value="">全部</SelectItem>
                 <SelectItem value="pending">待审核</SelectItem>
                 <SelectItem value="approved">已通过</SelectItem>
                 <SelectItem value="rejected">已拒绝</SelectItem>
@@ -418,17 +419,19 @@ export function AdminWithdrawPage() {
           <DialogHeader>
             <DialogTitle>上传打款凭证</DialogTitle>
           </DialogHeader>
-          <p className="text-sm text-muted-foreground">审批已通过，请填写打款凭证信息（可选）。</p>
+          <p className="text-sm text-muted-foreground">审批已通过，请上传打款凭证截图（图片），备注可选。</p>
           {mutError ? (
             <Alert variant="destructive"><AlertDescription>{mutError}</AlertDescription></Alert>
           ) : null}
           <div className="space-y-3">
             <div className="space-y-1.5">
-              <Label>凭证图片 URL</Label>
-              <Input
+              <Label>凭证图片</Label>
+              {/* 这里假设有一个Upload组件，上传后setProofUrl(url) */}
+              <ImageUpload
                 value={proofUrl}
-                onChange={(e) => setProofUrl(e.target.value)}
-                placeholder="https://example.com/receipt.png"
+                onChange={setProofUrl}
+                accept="image/*"
+                description="请上传打款截图"
               />
             </div>
             <div className="space-y-1.5">
@@ -443,7 +446,7 @@ export function AdminWithdrawPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setProofRow(null)}>跳过</Button>
-            <Button onClick={submitProof} disabled={proofUploading}>
+            <Button onClick={submitProof} disabled={proofUploading || !proofUrl}>
               {proofUploading ? '提交中…' : '提交凭证'}
             </Button>
           </DialogFooter>

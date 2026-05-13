@@ -38,6 +38,13 @@ function payChannelLabel(channel: string | undefined, payFlat: number | undefine
   return channel || '-'
 }
 
+function payFromLabel(payFrom: string | undefined) {
+  if (payFrom === 'pc') return 'PC'
+  if (payFrom === 'wap') return '移动端'
+  if (payFrom === 'wapwx') return '微信内'
+  return payFrom || '-'
+}
+
 export function AdminPaymentsPage() {
   const [filterStatus, setFilterStatus] = useState('')
   const [filterEmail, setFilterEmail] = useState('')
@@ -123,15 +130,16 @@ export function AdminPaymentsPage() {
               <TableHead className="w-28 text-right">金额（¥）</TableHead>
               <TableHead className="w-28 text-right">充值额度</TableHead>
               <TableHead className="w-24">渠道</TableHead>
+              <TableHead className="w-24">终端</TableHead>
               <TableHead className="w-24">状态</TableHead>
               <TableHead className="w-40">下单时间</TableHead>
               <TableHead className="w-40">支付时间</TableHead>
             </TableRow>
           </TableHeader>
-          {loading ? <TableSkeleton cols={10} /> : (
+          {loading ? <TableSkeleton cols={11} /> : (
             <TableBody>
               {data.orders.length === 0 ? (
-                <TableEmpty cols={10} Icon={CreditCardIcon} title="暂无订单" description="此条件下暂无充值订单。" />
+                <TableEmpty cols={11} Icon={CreditCardIcon} title="暂无订单" description="此条件下暂无充值订单。" />
               ) : data.orders.map((row, i) => (
                 <TableRow key={row.id ?? i}>
                   <TableCell>{row.id}</TableCell>
@@ -144,6 +152,7 @@ export function AdminPaymentsPage() {
                   <TableCell className="text-right font-mono">¥{(row.amount ?? 0).toFixed(2)}</TableCell>
                   <TableCell className="text-right font-mono">¥{((row.credits ?? 0) / 1e6).toFixed(2)}</TableCell>
                   <TableCell className="text-sm">{payChannelLabel(row.pay_channel, row.pay_flat)}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{payFromLabel(row.pay_from)}</TableCell>
                   <TableCell>{statusBadge(row.status)}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">
                     {row.created_at ? new Date(row.created_at).toLocaleString('zh-CN') : '-'}

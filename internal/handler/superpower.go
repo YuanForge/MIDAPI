@@ -4,10 +4,12 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"fanapi/internal/db"
@@ -327,6 +329,18 @@ func AdminListAPIKeys(c *gin.Context) {
 	sess.Limit(size, (page-1)*size).Find(&keys)
 
 	c.JSON(http.StatusOK, gin.H{"keys": keys, "total": total})
+}
+
+// 用户状态中文
+func userStatusText(status string) string {
+	switch status {
+	case "active":
+		return "正常"
+	case "frozen":
+		return "已冻结"
+	default:
+		return status
+	}
 }
 
 // PATCH /admin/api-keys/:id/revoke  吊销 API Key
@@ -811,14 +825,14 @@ func runExportTask(taskID int64, host string) {
 		}
 		var records []row
 		db.Engine.Table("billing_transactions").OrderBy("id DESC").Limit(100000).Find(&records)
-		headers = []string{"ID", "UserID", "Type", "Credits", "Cost", "CorrID", "CreatedAt"}
+		headers = []string{"ID", "用户ID", "类型", "积分变动(CNY)", "成本(CNY)", "关联ID", "时间"}
 		for _, r := range records {
 			rows = append(rows, []string{
 				fmt.Sprintf("%d", r.ID),
 				fmt.Sprintf("%d", r.UserID),
 				r.Type,
-				fmt.Sprintf("%d", r.Credits),
-				fmt.Sprintf("%d", r.Cost),
+				fmt.Sprintf("%.6f", float64(r.Credits)/1_000_000),
+				fmt.Sprintf("%.6f", float64(r.Cost)/1_000_000),
 				r.CorrID,
 				r.CreatedAt.Format("2006-01-02 15:04:05"),
 			})
@@ -835,14 +849,14 @@ func runExportTask(taskID int64, host string) {
 		}
 		var records []row
 		db.Engine.Table("billing_transactions").OrderBy("id DESC").Limit(100000).Find(&records)
-		headers = []string{"ID", "用户ID", "类型", "积分", "成本", "关联ID", "时间"}
+		headers = []string{"ID", "用户ID", "类型", "积分变动(CNY)", "成本(CNY)", "关联ID", "时间"}
 		for _, r := range records {
 			rows = append(rows, []string{
 				fmt.Sprintf("%d", r.ID),
 				fmt.Sprintf("%d", r.UserID),
 				r.Type,
-				fmt.Sprintf("%d", r.Credits),
-				fmt.Sprintf("%d", r.Cost),
+				fmt.Sprintf("%.6f", float64(r.Credits)/1_000_000),
+				fmt.Sprintf("%.6f", float64(r.Cost)/1_000_000),
 				r.CorrID,
 				r.CreatedAt.Format("2006-01-02 15:04:05"),
 			})
@@ -859,13 +873,13 @@ func runExportTask(taskID int64, host string) {
 		}
 		var records []row
 		db.Engine.Table("users").OrderBy("id ASC").Limit(100000).Find(&records)
-		headers = []string{"ID", "用户名", "邮箱", "余额", "角色", "状态", "注册时间"}
+		headers = []string{"ID", "用户名", "邮箱", "余额(CNY)", "角色", "状态", "注册时间"}
 		for _, r := range records {
 			rows = append(rows, []string{
 				fmt.Sprintf("%d", r.ID),
 				r.Username,
 				r.Email,
-				fmt.Sprintf("%d", r.Balance),
+				fmt.Sprintf("%.6f", float64(r.Balance)/1_000_000),
 				r.Role,
 				r.Status,
 				r.CreatedAt.Format("2006-01-02 15:04:05"),
@@ -1418,13 +1432,50 @@ func ListCoupons(c *gin.Context) {
 
 // POST /admin/coupons
 func CreateCoupon(c *gin.Context) {
-	var cp model.Coupon
-	if err := c.ShouldBindJSON(&cp); err != nil {
+	var req struct {
+		Code          string `json:"code"`
+		Type          string `json:"type"`
+		Title         string `json:"title"`
+		DiscountType  string `json:"discount_type"`
+		DiscountValue int64  `json:"discount_value"`
+		MinAmount     int64  `json:"min_amount"`
+		MaxDiscount   int64  `json:"max_discount"`
+		TotalCount    int    `json:"total_count"`
+		PerUserLimit  int    `json:"per_user_limit"`
+		ValidFrom     string `json:"valid_from"`
+		ValidUntil    string `json:"valid_until"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	cp.CreatedBy = getAdminID(c)
-	if _, err := db.Engine.Insert(&cp); err != nil {
+	var validFrom *time.Time
+	if t, err := parseDateTime(req.ValidFrom, false); err == nil && !t.IsZero() {
+		validFrom = &t
+	}
+	var validUntil *time.Time
+	if t, err := parseDateTime(req.ValidUntil, true); err == nil && !t.IsZero() {
+		validUntil = &t
+	}
+	code := strings.TrimSpace(req.Code)
+	if code == "" {
+		code = fmt.Sprintf("CPN%d%d", time.Now().Unix(), rand.Intn(10000))
+	}
+	cp := &model.Coupon{
+		Code:          code,
+		Type:          req.Type,
+		Title:         req.Title,
+		DiscountType:  req.DiscountType,
+		DiscountValue: req.DiscountValue,
+		MinAmount:     req.MinAmount,
+		MaxDiscount:   req.MaxDiscount,
+		TotalCount:    req.TotalCount,
+		PerUserLimit:  req.PerUserLimit,
+		ValidFrom:     validFrom,
+		ValidUntil:    validUntil,
+		CreatedBy:     getAdminID(c),
+	}
+	if _, err := db.Engine.Insert(cp); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

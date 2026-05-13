@@ -331,6 +331,7 @@ func main() {
 
 		// 用户任务查询（支持 JWT 或 API Key）
 		authed.GET("/v1/tasks", handler.ListUserTasks)
+		authed.DELETE("/v1/tasks/history", handler.DeleteUserTaskHistory)
 		authed.GET("/v1/tasks/:id", handler.GetTask)
 		authed.GET("/v1/tasks/:id/billing", handler.GetTaskBilling)
 		authed.GET("/v1/llm-logs", handler.UserListLLMLogs)

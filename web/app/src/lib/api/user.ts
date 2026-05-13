@@ -151,6 +151,7 @@ export interface PaymentOrder {
   id: number;
   out_trade_no: string;
   pay_flat: number;
+  pay_channel?: string;
   pay_from?: string;
   pro_name?: string;
   amount: number;
@@ -217,6 +218,8 @@ export const userApi = {
     http.get<{ valid: boolean; coupon_id: number; discount_yuan: number; final_amount: number; discount_type: string; discount_value: number }>('/user/coupons/validate', { params: { code, amount } }),
   listTasks: (params: Record<string, unknown> = {}) =>
     http.get<{ items?: UserTask[]; tasks?: UserTask[]; total?: number } | UserTask[]>('/v1/tasks', { params }),
+  clearTaskHistory: (type?: string) =>
+    http.delete<Record<string, unknown>>('/v1/tasks/history', { params: type ? { type } : {} }),
   getTask: (id: number) =>
     http.get<{ task?: UserTask } | UserTask>(`/v1/tasks/${id}`),
   getTaskBilling: (id: number) =>

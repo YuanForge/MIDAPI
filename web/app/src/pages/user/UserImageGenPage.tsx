@@ -143,6 +143,17 @@ export function UserImageGenPage() {
     } catch { /* ignore */ }
   }
 
+  async function clearHistory() {
+    try {
+      await userApi.clearTaskHistory('image')
+      setHistoryTasks([])
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '清空历史失败'
+      setError(message)
+      toast.error(message)
+    }
+  }
+
   useEffect(() => { void loadHistory() }, [])
 
   function currentApiKey() {
@@ -440,7 +451,7 @@ export function UserImageGenPage() {
             <span className="text-sm font-semibold">历史生成</span>
             <div className="flex items-center gap-2">
               {historyTasks.length > 0 && (
-                <button type="button" onClick={() => setHistoryTasks([])} className="text-xs text-muted-foreground hover:text-destructive">清空</button>
+                <button type="button" onClick={() => void clearHistory()} className="text-xs text-muted-foreground hover:text-destructive">清空</button>
               )}
               <button type="button" onClick={() => void loadHistory()} className="text-xs text-muted-foreground hover:text-foreground">刷新</button>
             </div>

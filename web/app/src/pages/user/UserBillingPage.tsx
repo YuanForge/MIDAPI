@@ -479,13 +479,14 @@ export function UserBillingPage() {
                   <TableHead>订单号</TableHead>
                   <TableHead>充值金额</TableHead>
                   <TableHead>到账积分</TableHead>
+                  <TableHead>渠道</TableHead>
                   <TableHead>状态</TableHead>
                   <TableHead>支付时间</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {!orderData?.items?.length ? (
-                  <TableRow><TableCell colSpan={5} className="text-center py-6 text-muted-foreground">暂无订单记录</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={6} className="text-center py-6 text-muted-foreground">暂无订单记录</TableCell></TableRow>
                 ) : (
                   orderData.items.map((row: PaymentOrder) => (
                     <TableRow key={row.id}>
@@ -494,6 +495,7 @@ export function UserBillingPage() {
                       <TableCell className="font-semibold text-green-600">
                         {row.credits ? `+${formatCredits(row.credits)} 积分` : '—'}
                       </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">{row.pay_channel || (row.pay_flat === 1 ? 'wechat' : row.pay_flat === 2 ? 'alipay' : 'epay')}</TableCell>
                       <TableCell>
                         <Badge variant={row.status === 'paid' ? 'default' : 'secondary'}>{orderStatusLabel(row.status)}</Badge>
                       </TableCell>

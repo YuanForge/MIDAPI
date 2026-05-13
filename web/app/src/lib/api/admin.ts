@@ -410,6 +410,7 @@ export type AdminPaymentOrder = {
   trade_no?: string
   pay_flat?: number
   pay_channel?: string
+  pay_from?: string
   created_at?: string
   paid_at?: string
 }
