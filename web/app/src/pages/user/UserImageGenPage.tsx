@@ -438,7 +438,12 @@ export function UserImageGenPage() {
         <Card className="hidden 2xl:flex flex-col overflow-hidden">
           <div className="flex items-center justify-between border-b px-4 py-3 shrink-0">
             <span className="text-sm font-semibold">历史生成</span>
-            <button type="button" onClick={() => void loadHistory()} className="text-xs text-muted-foreground hover:text-foreground">刷新</button>
+            <div className="flex items-center gap-2">
+              {historyTasks.length > 0 && (
+                <button type="button" onClick={() => setHistoryTasks([])} className="text-xs text-muted-foreground hover:text-destructive">清空</button>
+              )}
+              <button type="button" onClick={() => void loadHistory()} className="text-xs text-muted-foreground hover:text-foreground">刷新</button>
+            </div>
           </div>
           <div className="flex-1 overflow-y-auto p-2">
             {historyTasks.length === 0 ? (

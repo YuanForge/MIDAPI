@@ -67,13 +67,13 @@ import { useSiteSettings } from '@/hooks/use-site-settings'
 import { clearRoleToken, getRoleToken, setSiteModePreference } from '@/lib/auth/storage'
 import { userApi } from '@/lib/api/user'
 
-type NavItem = {
+export type NavItem = {
   label: string
   href: string
   icon: ComponentType<{ className?: string }>
 }
 
-type NavGroup = {
+export type NavGroup = {
   label?: string
   items: NavItem[]
   requiresAuth?: boolean

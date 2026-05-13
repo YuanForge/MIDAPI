@@ -120,6 +120,14 @@ export type InviteInfo = {
   frozen_balance?: number
 }
 
+export type InviteeRecord = {
+  id?: number
+  username?: string
+  total_recharge?: number
+  total_spend?: number
+  created_at?: string
+}
+
 export type RedeemRecord = {
   id?: number
   code?: string
@@ -194,6 +202,7 @@ export const userApi = {
   getRedeemHistory: (page = 1, size = 20) =>
     http.get<{ records?: RedeemRecord[]; list?: RedeemRecord[] } | RedeemRecord[]>('/user/cards/redeem-history', { params: { page, size } }),
   getInviteInfo: () => http.get<InviteInfo>('/user/invite'),
+  getInviteeList: () => http.get<{ invitees: InviteeRecord[] }>('/user/invite/list'),
   convertFrozen: (amount = 0) =>
     http.post<Record<string, unknown>>('/user/invite/convert', { amount }),
   getPaymentQR: () =>
@@ -204,6 +213,8 @@ export const userApi = {
     http.post<Record<string, unknown>>('/user/withdraw', { amount, payment_type: paymentType }),
   listWithdrawHistory: (page = 1, size = 20) =>
     http.get<{ records?: WithdrawRecord[]; list?: WithdrawRecord[]; total?: number } | WithdrawRecord[]>('/user/withdraw/history', { params: { page, size } }),
+  validateCoupon: (code: string, amount: number) =>
+    http.get<{ valid: boolean; coupon_id: number; discount_yuan: number; final_amount: number; discount_type: string; discount_value: number }>('/user/coupons/validate', { params: { code, amount } }),
   listTasks: (params: Record<string, unknown> = {}) =>
     http.get<{ items?: UserTask[]; tasks?: UserTask[]; total?: number } | UserTask[]>('/v1/tasks', { params }),
   getTask: (id: number) =>

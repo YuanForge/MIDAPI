@@ -9,4 +9,6 @@ export const payApi = {
     http.post<{ pay_url?: string; out_trade_no?: string }>('/pay/epay/create', { amount, type }),
   getOrderStatus: (outTradeNo: string) =>
     http.get<{ status: string }>('/pay/order/status', { params: { out_trade_no: outTradeNo } }),
+  validateCoupon: (code: string, amount: number) =>
+    http.get<{ valid: boolean; coupon_id: number; discount_yuan: number; final_amount: number; discount_type: string; discount_value: number }>('/user/coupons/validate', { params: { code, amount } }),
 }

@@ -27,7 +27,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { copyToClipboard } from '@/lib/clipboard'
-import { userApi, type InviteInfo, type WithdrawRecord } from '@/lib/api/user'
+import { userApi, type InviteInfo, type WithdrawRecord, type InviteeRecord } from '@/lib/api/user'
 import { formatCredits } from '@/lib/formatters/credits'
 import { useAsync } from '@/hooks/use-async'
 
@@ -76,6 +76,11 @@ export function UserInvitePage() {
         : historyRes.total ?? withdrawals.length,
     } satisfies InviteData
   }, { info: {}, wechatQr: '', alipayQr: '', withdrawals: [], withdrawalsTotal: 0 } as InviteData, [historyPage])
+
+  const { data: inviteesData, loading: inviteesLoading } = useAsync(async () => {
+    const res = await userApi.getInviteeList()
+    return res.invitees ?? []
+  }, [] as InviteeRecord[], [])
 
   const [mutError, setMutError] = useState('')
   const [convertOpen, setConvertOpen] = useState(false)
@@ -405,6 +410,36 @@ export function UserInvitePage() {
             />
           </CardContent>
         ) : null}
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>被邀请用户列表</CardTitle>
+        </CardHeader>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>用户名</TableHead>
+              <TableHead className="w-36 text-right">累计充值（¥）</TableHead>
+              <TableHead className="w-36 text-right">累计消费（¥）</TableHead>
+              <TableHead className="w-40">注册时间</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {inviteesLoading ? (
+              <TableRow><TableCell colSpan={4} className="py-8 text-center text-sm text-muted-foreground">加载中...</TableCell></TableRow>
+            ) : inviteesData.length === 0 ? (
+              <TableRow><TableCell colSpan={4} className="py-8 text-center text-sm text-muted-foreground">暂无邀请记录</TableCell></TableRow>
+            ) : inviteesData.map((row) => (
+              <TableRow key={row.id}>
+                <TableCell className="font-medium">{row.username ?? '-'}</TableCell>
+                <TableCell className="text-right font-mono">¥{(row.total_recharge ?? 0).toFixed(2)}</TableCell>
+                <TableCell className="text-right font-mono">¥{(row.total_spend ?? 0).toFixed(2)}</TableCell>
+                <TableCell className="text-sm text-muted-foreground">{row.created_at ?? '-'}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
       </Card>
 
       <Dialog open={convertOpen} onOpenChange={setConvertOpen}>

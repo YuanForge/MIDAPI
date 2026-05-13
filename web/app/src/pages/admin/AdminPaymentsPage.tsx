@@ -28,9 +28,20 @@ function statusBadge(s: string | undefined) {
   return <Badge variant="outline">待支付</Badge>
 }
 
+function payChannelLabel(channel: string | undefined, payFlat: number | undefined) {
+  if (channel === 'wechat') return '微信支付'
+  if (channel === 'alipay') return '支付宝'
+  if (channel === 'epay') return 'Epay'
+  // fallback from pay_flat
+  if (payFlat === 1) return '微信支付'
+  if (payFlat === 2) return '支付宝'
+  return channel || '-'
+}
+
 export function AdminPaymentsPage() {
   const [filterStatus, setFilterStatus] = useState('')
   const [filterEmail, setFilterEmail] = useState('')
+  const [filterChannel, setFilterChannel] = useState('')
   const [page, setPage] = useState(1)
   const pageSize = 20
 
@@ -38,9 +49,10 @@ export function AdminPaymentsPage() {
     const params: Record<string, unknown> = { page, size: pageSize }
     if (filterStatus) params.status = filterStatus
     if (filterEmail) params.email = filterEmail
+    if (filterChannel) params.pay_channel = filterChannel
     const res = await adminApi.listPaymentOrders(params)
     return { orders: res.orders ?? [], total: res.total ?? 0 }
-  }, { orders: [] as AdminPaymentOrder[], total: 0 }, [page, filterStatus, filterEmail])
+  }, { orders: [] as AdminPaymentOrder[], total: 0 }, [page, filterStatus, filterEmail, filterChannel])
 
   const totalPages = Math.ceil(data.total / pageSize)
 
@@ -83,8 +95,20 @@ export function AdminPaymentsPage() {
               onChange={(e) => setFilterEmail(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleSearch()} />
           </div>
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">充值渠道</label>
+            <Select value={filterChannel || '_all'} onValueChange={(v) => { setFilterChannel(v === '_all' ? '' : v); setPage(1) }}>
+              <SelectTrigger className="w-28"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="_all">全部</SelectItem>
+                <SelectItem value="epay">Epay</SelectItem>
+                <SelectItem value="wechat">微信支付</SelectItem>
+                <SelectItem value="alipay">支付宝</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
           <Button onClick={handleSearch}>查询</Button>
-          <Button variant="outline" onClick={() => { setFilterStatus(''); setFilterEmail(''); setPage(1) }}>重置</Button>
+          <Button variant="outline" onClick={() => { setFilterStatus(''); setFilterEmail(''); setFilterChannel(''); setPage(1) }}>重置</Button>
         </CardContent>
       </Card>
 
@@ -98,15 +122,16 @@ export function AdminPaymentsPage() {
               <TableHead>平台单号</TableHead>
               <TableHead className="w-28 text-right">金额（¥）</TableHead>
               <TableHead className="w-28 text-right">充值额度</TableHead>
+              <TableHead className="w-24">渠道</TableHead>
               <TableHead className="w-24">状态</TableHead>
               <TableHead className="w-40">下单时间</TableHead>
               <TableHead className="w-40">支付时间</TableHead>
             </TableRow>
           </TableHeader>
-          {loading ? <TableSkeleton cols={9} /> : (
+          {loading ? <TableSkeleton cols={10} /> : (
             <TableBody>
               {data.orders.length === 0 ? (
-                <TableEmpty cols={9} Icon={CreditCardIcon} title="暂无订单" description="此条件下暂无充值订单。" />
+                <TableEmpty cols={10} Icon={CreditCardIcon} title="暂无订单" description="此条件下暂无充值订单。" />
               ) : data.orders.map((row, i) => (
                 <TableRow key={row.id ?? i}>
                   <TableCell>{row.id}</TableCell>
@@ -118,6 +143,7 @@ export function AdminPaymentsPage() {
                   <TableCell className="font-mono text-xs text-muted-foreground">{row.trade_no || '-'}</TableCell>
                   <TableCell className="text-right font-mono">¥{(row.amount ?? 0).toFixed(2)}</TableCell>
                   <TableCell className="text-right font-mono">¥{((row.credits ?? 0) / 1e6).toFixed(2)}</TableCell>
+                  <TableCell className="text-sm">{payChannelLabel(row.pay_channel, row.pay_flat)}</TableCell>
                   <TableCell>{statusBadge(row.status)}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">
                     {row.created_at ? new Date(row.created_at).toLocaleString('zh-CN') : '-'}

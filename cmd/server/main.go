@@ -158,11 +158,13 @@ func main() {
 			user.GET("/cards/redeem-history", handler.GetRedeemHistory)
 			user.GET("/payment-orders", handler.GetUserPaymentOrders)
 			user.GET("/invite", handler.GetInviteInfo)
+			user.GET("/invite/list", handler.GetInviteeList)
 			user.POST("/invite/convert", handler.ConvertFrozenBalance)
 			user.GET("/payment-qr", handler.GetPaymentQR)
 			user.PUT("/payment-qr", handler.SavePaymentQR)
 			user.POST("/withdraw", handler.SubmitWithdraw)
 			user.GET("/withdraw/history", handler.ListWithdrawHistory)
+			user.GET("/coupons/validate", handler.ValidateCoupon)
 		}
 
 		// 管理员路由（JWT 或 API Key + admin 角色）

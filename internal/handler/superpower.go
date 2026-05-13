@@ -1292,6 +1292,9 @@ func AdminListPaymentOrders(c *gin.Context) {
 	if pf := c.Query("pay_flat"); pf != "" {
 		sess = sess.Where("payment_orders.pay_flat=?", pf)
 	}
+	if pc := c.Query("pay_channel"); pc != "" {
+		sess = sess.Where("payment_orders.pay_channel=?", pc)
+	}
 	startAt := c.Query("start_at")
 	endAt := c.Query("end_at")
 	if startAt != "" {

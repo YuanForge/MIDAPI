@@ -59,6 +59,32 @@ export function UserBillingPage() {
   const qrCanvasRef = useRef<HTMLCanvasElement>(null)
   const [qrError, setQrError] = useState('')
 
+  // Coupon State
+  const [couponCode, setCouponCode] = useState('')
+  const [couponValidating, setCouponValidating] = useState(false)
+  const [couponResult, setCouponResult] = useState<{ discount_yuan: number; final_amount: number } | null>(null)
+  const [couponError, setCouponError] = useState('')
+
+  async function validateCoupon() {
+    if (!couponCode.trim()) return
+    const amount = Number(selectedAmount)
+    if (!amount || amount < 0.01) {
+      setCouponError('请先选择或输入充值金额')
+      return
+    }
+    setCouponValidating(true)
+    setCouponError('')
+    setCouponResult(null)
+    try {
+      const res = await payApi.validateCoupon(couponCode.trim(), amount)
+      setCouponResult({ discount_yuan: res.discount_yuan, final_amount: res.final_amount })
+    } catch (e: any) {
+      setCouponError(e.message || '优惠券验证失败')
+    } finally {
+      setCouponValidating(false)
+    }
+  }
+
   // 当 settings 加载完毕后，将支付方式重置为第一个可用方式
   useEffect(() => {
     if (!settings.wechatPayEnabled && settings.alipayEnabled) {
@@ -121,7 +147,7 @@ export function UserBillingPage() {
       return
     }
     
-    const amount = Number(selectedAmount)
+    const amount = couponResult ? couponResult.final_amount : Number(selectedAmount)
     setIsPaying(true)
     try {
       if (settings.payApplyEnabled) {
@@ -345,9 +371,31 @@ export function UserBillingPage() {
                     )}
                   </div>
 
+                  {/* 优惠券 */}
+                  <div className="w-64 space-y-1">
+                    <div className="flex items-center gap-2">
+                      <Input
+                        placeholder="输入优惠券码"
+                        value={couponCode}
+                        onChange={(e) => { setCouponCode(e.target.value); setCouponResult(null); setCouponError('') }}
+                        onKeyDown={(e) => e.key === 'Enter' && validateCoupon()}
+                        className="h-9 text-sm"
+                      />
+                      <Button size="sm" variant="outline" onClick={validateCoupon} disabled={couponValidating || !couponCode.trim()}>
+                        {couponValidating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : '验证'}
+                      </Button>
+                    </div>
+                    {couponError && <p className="text-xs text-destructive">{couponError}</p>}
+                    {couponResult && (
+                      <p className="text-xs text-green-600">
+                        优惠 ¥{couponResult.discount_yuan.toFixed(2)}，实付 ¥{couponResult.final_amount.toFixed(2)}
+                      </p>
+                    )}
+                  </div>
+
                   <Button size="lg" className="w-64 rounded-full text-lg" onClick={handlePay} disabled={isPaying || !selectedAmount}>
                     {isPaying && <Loader2 className="mr-2 h-5 w-5 animate-spin" />}
-                    立即支付 ￥{(Number(selectedAmount) || 0).toFixed(2)}
+                    立即支付 ￥{couponResult ? couponResult.final_amount.toFixed(2) : (Number(selectedAmount) || 0).toFixed(2)}
                   </Button>
                 </div>
               </CardContent>

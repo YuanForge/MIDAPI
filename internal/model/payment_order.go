@@ -13,11 +13,12 @@ type PaymentOrder struct {
 	Status     string  `xorm:"notnull default('pending') 'status'" json:"status"` // pending/paid/failed
 	TradeNo    string  `xorm:"notnull default('') 'trade_no'" json:"trade_no"`    // 三方平台交易号
 	// 中台支付扩展字段
-	PayFlat   int        `xorm:"notnull default(0) 'pay_flat'" json:"pay_flat"`  // 0=Epay 1=微信 2=支付宝
-	PayFrom   string     `xorm:"notnull default('') 'pay_from'" json:"pay_from"` // 支付终端来源
-	ProName   string     `xorm:"notnull default('') 'pro_name'" json:"pro_name"` // 商品名称
-	CreatedAt time.Time  `xorm:"created 'created_at'" json:"created_at"`
-	PaidAt    *time.Time `xorm:"null 'paid_at'" json:"paid_at"`
+	PayFlat    int        `xorm:"notnull default(0) 'pay_flat'" json:"pay_flat"`        // 0=Epay 1=微信 2=支付宝
+	PayFrom    string     `xorm:"notnull default('') 'pay_from'" json:"pay_from"`       // 支付终端来源
+	ProName    string     `xorm:"notnull default('') 'pro_name'" json:"pro_name"`       // 商品名称
+	PayChannel string     `xorm:"notnull default('') 'pay_channel'" json:"pay_channel"` // 充值渠道：epay / wechat / alipay
+	CreatedAt  time.Time  `xorm:"created 'created_at'" json:"created_at"`
+	PaidAt     *time.Time `xorm:"null 'paid_at'" json:"paid_at"`
 }
 
 func (*PaymentOrder) TableName() string { return "payment_orders" }

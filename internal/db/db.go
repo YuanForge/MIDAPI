@@ -68,6 +68,19 @@ func Init(cfg *config.DBConfig, migrate bool) error {
 		new(model.WithdrawRequest),
 		new(model.UserModelCredit),
 		new(model.ChatConversation),
+		// superpower models
+		new(model.CardBatch),
+		new(model.ChannelLog),
+		new(model.AdminAuditLog),
+		new(model.Notification),
+		new(model.Coupon),
+		new(model.CouponUse),
+		new(model.RiskLabel),
+		new(model.UpstreamPlatform),
+		new(model.Alert),
+		new(model.ExportTask),
+		new(model.AdminRole),
+		new(model.AdminUserRole),
 	); err != nil {
 		return err
 	}
