@@ -15,10 +15,6 @@
 		"ANTHROPIC_AUTH_TOKEN": "${localEnv:ANTHROPIC_AUTH_TOKEN}"
 	},
 
-	"mounts": [
-		"source=${localEnv:HOME}/.claude,target=/root/.claude,type=bind,consistency=cached"
-	],
-
 	"customizations": {
 		"vscode": {
 			"extensions": [

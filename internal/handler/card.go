@@ -31,6 +31,15 @@ func GenerateCards(c *gin.Context) {
 	}
 
 	adminID := c.GetInt64("user_id")
+
+	// 生成批次 ID
+	batchIDBytes := make([]byte, 8)
+	if _, err := rand.Read(batchIDBytes); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成批次ID失败"})
+		return
+	}
+	batchID := fmt.Sprintf("BATCH-%s", strings.ToUpper(hex.EncodeToString(batchIDBytes)))
+
 	cards := make([]*model.Card, 0, req.Count)
 	for i := 0; i < req.Count; i++ {
 		code, err := genCode()
@@ -43,15 +52,43 @@ func GenerateCards(c *gin.Context) {
 			Credits:   req.Credits,
 			Status:    "unused",
 			Note:      req.Note,
+			BatchID:   batchID,
 			VendorID:  req.VendorID,
 			CreatedBy: adminID,
 		})
 	}
-	if _, err := db.Engine.Insert(&cards); err != nil {
+
+	sess := db.Engine.NewSession()
+	defer sess.Close()
+	if err := sess.Begin(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "事务开启失败"})
+		return
+	}
+
+	// 创建批次记录
+	batch := &model.CardBatch{
+		BatchID:   batchID,
+		Note:      req.Note,
+		Credits:   req.Credits,
+		Count:     req.Count,
+		CreatedBy: adminID,
+	}
+	if _, err := sess.Insert(batch); err != nil {
+		_ = sess.Rollback()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建批次失败，请稍后重试"})
+		return
+	}
+
+	if _, err := sess.Insert(&cards); err != nil {
+		_ = sess.Rollback()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成卡密失败，请稍后重试"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"cards": cards, "count": len(cards)})
+	if err := sess.Commit(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "提交失败，请稍后重试"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"cards": cards, "count": len(cards), "batch_id": batchID})
 }
 
 // GET /admin/cards?status=unused&page=1&size=20

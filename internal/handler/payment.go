@@ -582,10 +582,10 @@ func ValidateCoupon(c *gin.Context) {
 		return
 	}
 
-	// 计算折扣（percent: discount_value 为折扣比例的万分比，如 9000=90折；fixed: 分为单位）
+	// 计算折扣（percent: discount_value 为折扣比例的百分比×100存储，如 500=5%；fixed: 分为单位）
 	var discountYuan float64
 	if cp.DiscountType == "percent" {
-		discountYuan = amountYuan - amountYuan*float64(cp.DiscountValue)/10000.0
+		discountYuan = amountYuan * float64(cp.DiscountValue) / 10000.0
 	} else {
 		discountYuan = float64(cp.DiscountValue) / 100.0
 	}

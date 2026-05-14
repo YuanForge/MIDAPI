@@ -205,12 +205,12 @@ export function AdminWithdrawPage() {
         <CardContent className="flex flex-wrap items-end gap-3 py-4">
           <div className="space-y-1">
             <label className="text-xs text-muted-foreground">状态</label>
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <Select value={statusFilter || '_all'} onValueChange={(v) => setStatusFilter(v === '_all' ? '' : v)}>
               <SelectTrigger className="w-32">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">全部</SelectItem>
+                <SelectItem value="_all">全部</SelectItem>
                 <SelectItem value="pending">待审核</SelectItem>
                 <SelectItem value="approved">已通过</SelectItem>
                 <SelectItem value="rejected">已拒绝</SelectItem>

@@ -2,19 +2,8 @@
 # 开发镜像：Go + air 热重载
 # 使用方式：docker compose up
 # ─────────────────────────────────────────────────────────────
-FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/golang:1.26
+FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/golang:1.26.1
 
-RUN if [ -f /etc/apt/sources.list ]; then \
-        sed -i 's|http://deb.debian.org|http://mirrors.aliyun.com|g; s|http://security.debian.org|http://mirrors.aliyun.com|g' /etc/apt/sources.list; \
-    fi && \
-    if [ -d /etc/apt/sources.list.d ]; then \
-        find /etc/apt/sources.list.d -name "*.list" -exec sed -i 's|http://deb.debian.org|http://mirrors.aliyun.com|g; s|http://security.debian.org|http://mirrors.aliyun.com|g' {} +; \
-        find /etc/apt/sources.list.d -name "*.sources" -exec sed -i 's|http://deb.debian.org|http://mirrors.aliyun.com|g; s|http://security.debian.org|http://mirrors.aliyun.com|g' {} +; \
-    fi && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates tzdata git nodejs npm && \
-    rm -rf /var/lib/apt/lists/* && \
-    npm config set registry https://registry.npmmirror.com
 
 
 
@@ -22,12 +11,10 @@ ENV TZ=Asia/Shanghai \
 	GOPROXY=https://goproxy.cn,direct \
 	GOSUMDB=off
 
-# 安装 air 热重载工具 + swag 文档生成工具
-RUN go install github.com/air-verse/air@latest && \
-    go install github.com/swaggo/swag/cmd/swag@latest
+
 
 WORKDIR /app
 
 EXPOSE 8080
 
-CMD ["air", "-c", ".air.toml"]
+

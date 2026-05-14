@@ -437,7 +437,7 @@ export function UserInvitePage() {
                 <TableCell className="font-medium">{row.username ?? '-'}</TableCell>
                 <TableCell className="text-right font-mono">¥{(row.total_recharge ?? 0).toFixed(2)}</TableCell>
                 <TableCell className="text-right font-mono">¥{(row.total_spend ?? 0).toFixed(2)}</TableCell>
-                <TableCell className="text-sm text-muted-foreground">{row.created_at ?? '-'}</TableCell>
+                <TableCell className="text-sm text-muted-foreground">{row.created_at ? new Date(row.created_at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '-'}</TableCell>
               </TableRow>
             ))}
           </TableBody>

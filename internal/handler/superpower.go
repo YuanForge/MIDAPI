@@ -899,13 +899,24 @@ func runExportTask(taskID int64, host string) {
 		db.Engine.Table("payment_orders").OrderBy("id DESC").Limit(100000).Find(&records)
 		headers = []string{"ID", "用户ID", "订单号", "金额(元)", "积分", "状态", "支付渠道", "时间"}
 		for _, r := range records {
+			statusZH := r.Status
+			switch r.Status {
+			case "paid":
+				statusZH = "已支付"
+			case "pending":
+				statusZH = "待支付"
+			case "failed":
+				statusZH = "失败"
+			case "refunded":
+				statusZH = "已退款"
+			}
 			rows = append(rows, []string{
 				fmt.Sprintf("%d", r.ID),
 				fmt.Sprintf("%d", r.UserID),
 				r.OutTradeNo,
 				fmt.Sprintf("%.2f", r.Amount),
 				fmt.Sprintf("%d", r.Credits),
-				r.Status,
+				statusZH,
 				r.PayChannel,
 				r.CreatedAt.Format("2006-01-02 15:04:05"),
 			})
@@ -1527,6 +1538,9 @@ func AdminListPaymentOrders(c *gin.Context) {
 	}
 	if uid := c.Query("user_id"); uid != "" {
 		sess = sess.Where("payment_orders.user_id=?", uid)
+	}
+	if email := c.Query("email"); email != "" {
+		sess = sess.Where("users.email ILIKE ?", "%"+email+"%")
 	}
 	if pf := c.Query("pay_flat"); pf != "" {
 		sess = sess.Where("payment_orders.pay_flat=?", pf)

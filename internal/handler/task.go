@@ -172,7 +172,7 @@ func ListUserTasks(c *gin.Context) {
 		size = 20
 	}
 
-	query := db.Engine.Where("user_id = ?", userID).Desc("id")
+	query := db.Engine.Where("user_id = ? AND user_deleted = false", userID).Desc("id")
 	if status := c.Query("status"); status != "" {
 		query = query.And("status = ?", status)
 	}
@@ -207,17 +207,17 @@ func ListUserTasks(c *gin.Context) {
 }
 
 // DELETE /v1/tasks/history
-// 清空当前用户的任务历史记录，默认仅删除已完成/失败的历史任务。
+// 清空当前用户的任务历史记录，软删除已完成/失败的历史任务（不影响管理员查看）。
 func DeleteUserTaskHistory(c *gin.Context) {
 	userID := c.MustGet("user_id").(int64)
 	taskType := c.Query("type")
 
-	query := db.Engine.Where("user_id = ? AND status IN ('done', 'failed')", userID)
+	query := db.Engine.Where("user_id = ? AND status IN ('done', 'failed') AND user_deleted = false", userID)
 	if taskType != "" {
 		query = query.And("type = ?", taskType)
 	}
 
-	n, err := query.Delete(&model.Task{})
+	n, err := query.Cols("user_deleted").Update(&model.Task{UserDeleted: true})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "清空失败，请稍后重试"})
 		return

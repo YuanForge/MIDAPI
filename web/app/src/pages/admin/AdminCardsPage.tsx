@@ -51,20 +51,26 @@ type TabView = 'batches' | 'cards' | 'uses'
 export function AdminCardsPage() {
   const [tab, setTab] = useState<TabView>('batches')
   const [statusFilter, setStatusFilter] = useState('')
-  const [queryParams, setQueryParams] = useState<Record<string, unknown>>({})
+  const [cardPage, setCardPage] = useState(1)
+  const cardPageSize = 50
+  const [queryParams, setQueryParams] = useState<Record<string, unknown>>({ page: 1, size: cardPageSize })
 
   const { data: batchRows, loading: batchLoading, reload: reloadBatches } = useAsync(async () => {
     const res = await adminApi.listCardBatches()
     return res.batches ?? []
   }, [] as AdminCardBatch[], [])
 
-  const { data: rows, loading, error: loadError, reload } = useAsync(async () => {
+  const { data: cardData, loading, error: loadError, reload } = useAsync(async () => {
     const response = await adminApi.listCards(queryParams)
-    return response.cards ?? []
-  }, [] as AdminCard[], [queryParams])
+    return { cards: response.cards ?? [], total: response.total ?? 0 }
+  }, { cards: [] as AdminCard[], total: 0 }, [queryParams])
+
+  const rows = cardData.cards
+  const cardTotal = cardData.total
+  const cardTotalPages = Math.ceil(cardTotal / cardPageSize)
 
   const { data: usedRows, loading: usedLoading } = useAsync(async () => {
-    const response = await adminApi.listCards({ status: 'used', limit: 500 })
+    const response = await adminApi.listCards({ status: 'used', page: 1, size: 500 })
     return response.cards ?? []
   }, [] as AdminCard[], [tab === 'uses' ? 1 : 0])
 
@@ -283,8 +289,8 @@ export function AdminCardsPage() {
               </SelectContent>
             </Select>
           </div>
-          <Button onClick={() => setQueryParams(statusFilter ? { status: statusFilter } : {})}>查询</Button>
-          <Button variant="outline" onClick={() => { setStatusFilter(''); setQueryParams({}) }}>重置</Button>
+          <Button onClick={() => { setCardPage(1); setQueryParams(statusFilter ? { status: statusFilter, page: 1, size: cardPageSize } : { page: 1, size: cardPageSize }) }}>查询</Button>
+          <Button variant="outline" onClick={() => { setStatusFilter(''); setCardPage(1); setQueryParams({ page: 1, size: cardPageSize }) }}>重置</Button>
         </CardContent>
       </Card>
 
@@ -353,6 +359,16 @@ export function AdminCardsPage() {
             </TableBody>
           )}
         </Table>
+        {cardTotalPages > 1 ? (
+          <div className="flex items-center justify-between border-t px-4 py-3">
+            <span className="text-sm text-muted-foreground">共 {cardTotal} 条</span>
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="outline" disabled={cardPage <= 1} onClick={() => { const p = cardPage - 1; setCardPage(p); setQueryParams((prev) => ({ ...prev, page: p })) }}>上一页</Button>
+              <span className="text-sm">{cardPage} / {cardTotalPages}</span>
+              <Button size="sm" variant="outline" disabled={cardPage >= cardTotalPages} onClick={() => { const p = cardPage + 1; setCardPage(p); setQueryParams((prev) => ({ ...prev, page: p })) }}>下一页</Button>
+            </div>
+          </div>
+        ) : null}
       </Card>
       </> : null}
 

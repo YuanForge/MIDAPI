@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"net/http"
+	"time"
 
 	"fanapi/internal/billing"
 	"fanapi/internal/db"
@@ -133,11 +134,11 @@ func GetInviteeList(c *gin.Context) {
 	userID := c.MustGet("user_id").(int64)
 
 	type inviteeRow struct {
-		ID            int64   `json:"id" xorm:"id"`
-		Username      string  `json:"username" xorm:"username"`
-		TotalRecharge float64 `json:"total_recharge" xorm:"total_recharge"`
-		TotalSpend    float64 `json:"total_spend" xorm:"total_spend"`
-		CreatedAt     string  `json:"created_at" xorm:"created_at"`
+		ID            int64     `json:"id" xorm:"id"`
+		Username      string    `json:"username" xorm:"username"`
+		TotalRecharge float64   `json:"total_recharge" xorm:"total_recharge"`
+		TotalSpend    float64   `json:"total_spend" xorm:"total_spend"`
+		CreatedAt     time.Time `json:"created_at" xorm:"created_at"`
 	}
 
 	var rows []inviteeRow
@@ -145,7 +146,7 @@ func GetInviteeList(c *gin.Context) {
 		SELECT u.id, u.username,
 		       COALESCE((SELECT SUM(amount) FROM payment_orders WHERE user_id = u.id AND status = 'paid'), 0)       AS total_recharge,
 		       COALESCE((SELECT SUM(credits) FROM billing_transactions WHERE user_id = u.id AND type IN ('charge','settle')), 0) / 1000000.0 AS total_spend,
-		       TO_CHAR(u.created_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD HH24:MI') AS created_at
+		       u.created_at
 		FROM users u
 		WHERE u.inviter_id = $1
 		ORDER BY u.created_at DESC

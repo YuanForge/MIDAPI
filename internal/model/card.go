@@ -7,8 +7,9 @@ type Card struct {
 	ID        int64      `xorm:"pk autoincr 'id'" json:"id"`
 	Code      string     `xorm:"notnull unique 'code'" json:"code"`                // 兑换码，唯一
 	Credits   int64      `xorm:"notnull 'credits'" json:"credits"`                 // 面值（微元）
-	Status    string     `xorm:"notnull default('unused') 'status'" json:"status"` // unused / used
+	Status    string     `xorm:"notnull default('unused') 'status'" json:"status"` // unused / used / voided
 	Note      string     `xorm:"default('') 'note'" json:"note"`                   // 备注
+	BatchID   string     `xorm:"default('') 'batch_id'" json:"batch_id"`           // 批次 ID
 	VendorID  *int64     `xorm:"'vendor_id'" json:"vendor_id"`                     // 来源分销商 ID
 	CreatedBy int64      `xorm:"default(0) 'created_by'" json:"created_by"`
 	UsedBy    int64      `xorm:"default(0) 'used_by'" json:"used_by"`

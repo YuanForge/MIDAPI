@@ -145,7 +145,7 @@ const scalarHTMLTpl = `<!doctype html>
 	id="api-reference"
 	data-url="/openapi-user.json"
   data-configuration='{"theme":"default","darkMode":false,"layout":"sidebar","hideDarkModeToggle":true}'
-</div>
+></div>
 <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
 </body>
 </html>`
