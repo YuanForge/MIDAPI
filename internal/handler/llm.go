@@ -758,10 +758,15 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 		// 4xx body 通常是 JSON，5xx 也常带结构化错误；非 JSON 时跳过。
 		var bizErr string
 		var fatal bool
-		if ch.ErrorScript != "" {
-			var bodyJSON map[string]interface{}
-			if json.Unmarshal(bodyErr, &bodyJSON) == nil && bodyJSON != nil {
+		var bodyJSON map[string]interface{}
+		if json.Unmarshal(bodyErr, &bodyJSON) == nil && bodyJSON != nil {
+			if ch.ErrorScript != "" {
 				bizErr, fatal, _ = script.RunCheckError(ch.ErrorScript, bodyJSON)
+			}
+			if bizErr == "" {
+				if detected, ok := script.DetectUpstreamError(bodyJSON); ok {
+					bizErr = detected
+				}
 			}
 		}
 		if fatal {
@@ -816,29 +821,40 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 		_ = json.Unmarshal(respBytes, &origRespJSON)
 
 		if origRespJSON != nil {
-			// error_script 业务错误检测：捕获上游返回 200 但 body 内含错误的情况（如额度耗尽）
+			// 200 但 body 内含 error：优先跑 error_script，未命中时走通用 OpenAI error 检测。
+			bizErr := ""
+			fatal := false
 			if ch.ErrorScript != "" {
-				if bizErr, fatal, scriptErr := script.RunCheckError(ch.ErrorScript, origRespJSON); scriptErr == nil && bizErr != "" {
-					service.RecordChannelError(c.Request.Context(), channelID)
-					if fatal {
-						_ = service.PatchChannelActive(c.Request.Context(), channelID, false)
-						log.Printf("[llm] disable channel id=%d fatal_err=%q status=200", channelID, bizErr)
-					}
-					if len(triedIDs) < maxRetries {
-						if nextCh := selectNextChannel(reqData, triedIDs, stableChannels); nextCh != nil {
-							if totalHold > 0 {
-								mcRefunded := llmRefundCredits(c, userID, totalHold)
-								_ = service.WriteTx(c.Request.Context(), userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, "refund", totalHold, upstreamCostHold, mcRefunded, model.JSON{"reason": "channel_retry"})
-								_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("status", "error_msg").
-									Update(&model.LLMLog{Status: "error", ErrorMsg: "channel retry: " + bizErr})
-							}
-							llmProxyWithChannel(c, nextCh, origReqData, userID, apiKeyIDVal, userGroup, triedIDs, stableChannels)
-							return
-						}
-					}
-					llmRefundAndAbort(c, corrID, userID, totalHold, upstreamCostHold, poolKeyIDVal, http.StatusOK, bizErr)
-					return
+				if detected, fatalDetected, scriptErr := script.RunCheckError(ch.ErrorScript, origRespJSON); scriptErr == nil {
+					bizErr = detected
+					fatal = fatalDetected
 				}
+			}
+			if bizErr == "" {
+				if detected, ok := script.DetectUpstreamError(origRespJSON); ok {
+					bizErr = detected
+				}
+			}
+			if bizErr != "" {
+				service.RecordChannelError(c.Request.Context(), channelID)
+				if fatal {
+					_ = service.PatchChannelActive(c.Request.Context(), channelID, false)
+					log.Printf("[llm] disable channel id=%d fatal_err=%q status=200", channelID, bizErr)
+				}
+				if len(triedIDs) < maxRetries {
+					if nextCh := selectNextChannel(reqData, triedIDs, stableChannels); nextCh != nil {
+						if totalHold > 0 {
+							mcRefunded := llmRefundCredits(c, userID, totalHold)
+							_ = service.WriteTx(c.Request.Context(), userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, "refund", totalHold, upstreamCostHold, mcRefunded, model.JSON{"reason": "channel_retry"})
+							_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("status", "error_msg").
+								Update(&model.LLMLog{Status: "error", ErrorMsg: "channel retry: " + bizErr})
+						}
+						llmProxyWithChannel(c, nextCh, origReqData, userID, apiKeyIDVal, userGroup, triedIDs, stableChannels)
+						return
+					}
+				}
+				llmRefundAndAbort(c, corrID, userID, totalHold, upstreamCostHold, poolKeyIDVal, http.StatusOK, bizErr)
+				return
 			}
 		}
 
@@ -889,7 +905,18 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 			if checkSrc != "" && checkSrc != "[DONE]" {
 				var firstJSON map[string]interface{}
 				if json.Unmarshal([]byte(checkSrc), &firstJSON) == nil {
-					if bizErr, fatal, scriptErr := script.RunCheckError(ch.ErrorScript, firstJSON); scriptErr == nil && bizErr != "" {
+					bizErr := ""
+					fatal := false
+					if detected, fatalDetected, scriptErr := script.RunCheckError(ch.ErrorScript, firstJSON); scriptErr == nil {
+						bizErr = detected
+						fatal = fatalDetected
+					}
+					if bizErr == "" {
+						if detected, ok := script.DetectUpstreamError(firstJSON); ok {
+							bizErr = detected
+						}
+					}
+					if bizErr != "" {
 						service.RecordChannelError(c.Request.Context(), channelID)
 						if fatal {
 							_ = service.PatchChannelActive(c.Request.Context(), channelID, false)
@@ -913,6 +940,36 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 				}
 			}
 			// 第一行正常：将其拼回，后续 scanner 照常读取
+			resp.Body = io.NopCloser(io.MultiReader(strings.NewReader(string(firstLineBytes)), peekBuf))
+		}
+	} else {
+		peekBuf := bufio.NewReader(resp.Body)
+		firstLineBytes, peekErr := peekBuf.ReadBytes('\n')
+		if (peekErr == nil || len(firstLineBytes) > 0) && len(firstLineBytes) > 0 {
+			firstLine := strings.TrimRight(string(firstLineBytes), "\r\n")
+			checkSrc := strings.TrimPrefix(firstLine, "data: ")
+			if checkSrc != "" && checkSrc != "[DONE]" {
+				var firstJSON map[string]interface{}
+				if json.Unmarshal([]byte(checkSrc), &firstJSON) == nil {
+					if bizErr, ok := script.DetectUpstreamError(firstJSON); ok {
+						service.RecordChannelError(c.Request.Context(), channelID)
+						if len(triedIDs) < maxRetries {
+							if nextCh := selectNextChannel(reqData, triedIDs, stableChannels); nextCh != nil {
+								if totalHold > 0 {
+									mcRefunded := llmRefundCredits(c, userID, totalHold)
+									_ = service.WriteTx(c.Request.Context(), userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, "refund", totalHold, upstreamCostHold, mcRefunded, model.JSON{"reason": "channel_retry"})
+									_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("status", "error_msg").
+										Update(&model.LLMLog{Status: "error", ErrorMsg: "channel retry: " + bizErr})
+								}
+								llmProxyWithChannel(c, nextCh, origReqData, userID, apiKeyIDVal, userGroup, triedIDs, stableChannels)
+								return
+							}
+						}
+						llmRefundAndAbort(c, corrID, userID, totalHold, upstreamCostHold, poolKeyIDVal, http.StatusOK, bizErr)
+						return
+					}
+				}
+			}
 			resp.Body = io.NopCloser(io.MultiReader(strings.NewReader(string(firstLineBytes)), peekBuf))
 		}
 	}

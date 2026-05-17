@@ -246,33 +246,22 @@ func pollOneTask(ctx context.Context, task *model.Task, ch *model.Channel) {
 	db.Engine.Where("id = ?", task.ID).Cols("upstream_response").
 		Update(&model.Task{UpstreamResponse: toJSON(rawResp)})
 
-	mappedResp := rawResp
-	if ch.QueryScript != "" {
-		mapped, scriptErr := script.RunMapResponse(ch.QueryScript, rawResp)
-		if scriptErr != nil {
-			log.Printf("[poller] task %d: query_script error: %v", task.ID, scriptErr)
-			return // upstream_response 已写入，管理端可看到原始响应排查脚本问题
-		}
-		mappedResp = mapped
-	}
-
-	statusVal := toIntField(mappedResp, "status")
 	upstreamResp := toJSON(rawResp)
 
-	// 错误检测
+	// 错误检测优先基于原始轮询响应，避免 query_script 抹平 error 字段后跳过失败重试。
 	{
 		var detectedErr string
 		var isErr bool
 		var fatal bool
 		if ch.ErrorScript != "" {
 			var scriptErr error
-			detectedErr, fatal, scriptErr = script.RunCheckError(ch.ErrorScript, mappedResp)
+			detectedErr, fatal, scriptErr = script.RunCheckError(ch.ErrorScript, rawResp)
 			if scriptErr != nil {
 				log.Printf("[poller] task %d: error_script failed: %v", task.ID, scriptErr)
 			}
 			isErr = detectedErr != ""
 		} else {
-			detectedErr, isErr = script.DetectUpstreamError(mappedResp)
+			detectedErr, isErr = script.DetectUpstreamError(rawResp)
 		}
 		if fatal {
 			if err := service.PatchChannelActive(ctx, task.ChannelID, false); err != nil {
@@ -293,6 +282,18 @@ func pollOneTask(ctx context.Context, task *model.Task, ch *model.Channel) {
 			return
 		}
 	}
+
+	mappedResp := rawResp
+	if ch.QueryScript != "" {
+		mapped, scriptErr := script.RunMapResponse(ch.QueryScript, rawResp)
+		if scriptErr != nil {
+			log.Printf("[poller] task %d: query_script error: %v", task.ID, scriptErr)
+			return // upstream_response 已写入，管理端可看到原始响应排查脚本问题
+		}
+		mappedResp = mapped
+	}
+
+	statusVal := toIntField(mappedResp, "status")
 
 	switch statusVal {
 	case 2: // 成功

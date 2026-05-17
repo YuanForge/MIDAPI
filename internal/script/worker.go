@@ -195,6 +195,36 @@ func execJob(ctx context.Context, job *model.TaskJob) *model.WorkerResult {
 	}
 	base.UpstreamResponse = upstreamResp
 
+	// 错误检测优先基于原始上游响应，避免 response_script 将 error 字段抹平后导致无法重试。
+	errMsg, isErr := "", false
+	fatalErr := false
+	if job.ErrorScript != "" {
+		var scriptErr error
+		errMsg, fatalErr, scriptErr = RunCheckError(job.ErrorScript, upstreamResp)
+		if scriptErr != nil {
+			log.Printf("[worker] task %d: error_script failed: %v", job.TaskID, scriptErr)
+		}
+		isErr = errMsg != ""
+	} else {
+		errMsg, isErr = DetectUpstreamError(upstreamResp)
+	}
+	if fatalErr {
+		if err := service.PatchChannelActive(context.Background(), job.ChannelID, false); err != nil {
+			log.Printf("[worker] task %d: disable channel %d failed: %v", job.TaskID, job.ChannelID, err)
+		} else {
+			channelName := fmt.Sprintf("channel-%d", job.ChannelID)
+			go func(name string, id int64, reason string) {
+				defer func() { recover() }()
+				if err := notify.SendLarkChannelDisabled(name, id, reason); err != nil {
+					log.Printf("[lark notify] failed: %v", err)
+				}
+			}(channelName, job.ChannelID, errMsg)
+		}
+	}
+	if isErr {
+		return fail(errMsg)
+	}
+
 	// 应用 response_script
 	if job.ResponseScript != "" {
 		mapped, err := RunMapResponse(job.ResponseScript, respData)
@@ -215,36 +245,6 @@ func execJob(ctx context.Context, job *model.TaskJob) *model.WorkerResult {
 		base.Outcome = model.OutcomeAsync
 		base.UpstreamTaskID = upstreamTaskID
 		return base
-	}
-
-	// 错误检测（error_script 或内置识别逻辑）
-	errMsg, isErr := "", false
-	fatalErr := false
-	if job.ErrorScript != "" {
-		var scriptErr error
-		errMsg, fatalErr, scriptErr = RunCheckError(job.ErrorScript, respData)
-		if scriptErr != nil {
-			log.Printf("[worker] task %d: error_script failed: %v", job.TaskID, scriptErr)
-		}
-		isErr = errMsg != ""
-	} else {
-		errMsg, isErr = DetectUpstreamError(respData)
-	}
-	if fatalErr {
-		if err := service.PatchChannelActive(context.Background(), job.ChannelID, false); err != nil {
-			log.Printf("[worker] task %d: disable channel %d failed: %v", job.TaskID, job.ChannelID, err)
-		} else {
-			channelName := fmt.Sprintf("channel-%d", job.ChannelID)
-			go func(name string, id int64, reason string) {
-				defer func() { recover() }()
-				if err := notify.SendLarkChannelDisabled(name, id, reason); err != nil {
-					log.Printf("[lark notify] failed: %v", err)
-				}
-			}(channelName, job.ChannelID, errMsg)
-		}
-	}
-	if isErr {
-		return fail(errMsg)
 	}
 
 	// response_script 返回 status=3 表示业务失败（兼容 goja 导出的 int64/float64/int）
