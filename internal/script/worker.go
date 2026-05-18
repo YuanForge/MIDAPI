@@ -147,17 +147,24 @@ func execJob(ctx context.Context, job *model.TaskJob) *model.WorkerResult {
 	for k, v := range payload {
 		upstreamReq[k] = v
 	}
+	// initialReq 只记录实际会进入请求体的字段（排除 _url/_method/_headers 等控制字段）
+	controlFields := map[string]bool{"_url": true, "_method": true, "_headers": true, "_body_type": true, "_form_fields": true, "_files": true}
 	initialReq := make(map[string]interface{})
 	for k, v := range payload {
-		initialReq[k] = v
+		if !controlFields[k] {
+			initialReq[k] = v
+		}
 	}
-	// 计算实际 URL（含 {model} 和 {{pool_key}} 替换），方便管理端排障
+	// 计算实际 URL：优先使用 request_script 输出的 _url，其次回退到渠道 base_url
 	targetURLForLog := job.BaseURL
-	if modelVal, ok := job.Payload["model"].(string); ok && modelVal != "" {
-		targetURLForLog = strings.ReplaceAll(targetURLForLog, "{model}", modelVal)
+	if v, ok := payload["_url"].(string); ok && strings.TrimSpace(v) != "" {
+		targetURLForLog = v
+	} else {
+		if modelVal, ok := job.Payload["model"].(string); ok && modelVal != "" {
+			targetURLForLog = strings.ReplaceAll(targetURLForLog, "{model}", modelVal)
+		}
+		targetURLForLog = ResolveHeaderValue(targetURLForLog, job.PoolKeyValue)
 	}
-	// URL 里也做 {{}} / {{pool_key}} 替换（实际请求 URL 记录）
-	targetURLForLog = ResolveHeaderValue(targetURLForLog, job.PoolKeyValue)
 	upstreamReq["_url"] = targetURLForLog
 	upstreamReq["_method"] = job.Method
 	upstreamReq["_initial_request"] = initialReq
