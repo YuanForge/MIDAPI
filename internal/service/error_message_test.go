@@ -15,3 +15,26 @@ func TestUserFacingErrorMessageKeepsBusinessMessage(t *testing.T) {
 		t.Fatalf("expected business message to pass through, got %q", got)
 	}
 }
+
+func TestUserFacingErrorMessageStripsUpstreamErrorPrefix(t *testing.T) {
+	msg := `upstream error: upstream returned 400: {"error":{"message":"Invalid API key"}}`
+	got := UserFacingErrorMessage(msg)
+	if got == genericUpstreamErrorMessage {
+		t.Fatalf("expected real error content, got generic message")
+	}
+	want := `upstream returned 400: {"error":{"message":"Invalid API key"}}`
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
+func TestUserFacingErrorMessageStripsURL(t *testing.T) {
+	msg := "upstream returned 403: access denied to https://api.example.com/v1/chat"
+	got := UserFacingErrorMessage(msg)
+	if got == genericUpstreamErrorMessage {
+		t.Fatalf("expected message with URL stripped, got generic message")
+	}
+	if got == msg {
+		t.Fatalf("expected URL to be stripped, got original message")
+	}
+}

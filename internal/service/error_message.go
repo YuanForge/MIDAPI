@@ -1,19 +1,37 @@
 package service
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 const genericUpstreamErrorMessage = "上游服务暂时不可用，请稍后重试"
 
+var urlRegexp = regexp.MustCompile(`https?://\S+`)
+
 // UserFacingErrorMessage removes internal upstream details such as URLs, IPs,
-// network dial errors, and script implementation errors before returning errors to users.
+// and network dial errors before returning errors to users.
+// Internal prefixes are stripped so that the real upstream error content is preserved.
 func UserFacingErrorMessage(msg string) string {
 	trimmed := strings.TrimSpace(msg)
 	if trimmed == "" {
 		return "请求失败，请稍后重试"
 	}
 	lower := strings.ToLower(trimmed)
-	internalMarkers := []string{
-		"upstream error:",
+
+	// Strip internal prefixes and recursively process the remainder.
+	for _, prefix := range []string{
+		"upstream error: ",
+		"request mapping error: ",
+		"response mapping error: ",
+	} {
+		if strings.HasPrefix(lower, prefix) {
+			return UserFacingErrorMessage(trimmed[len(prefix):])
+		}
+	}
+
+	// Pure network / infrastructure errors → generic message.
+	for _, marker := range []string{
 		"dial tcp",
 		"i/o timeout",
 		"client.timeout",
@@ -22,16 +40,18 @@ func UserFacingErrorMessage(msg string) string {
 		"connection refused",
 		"connection reset",
 		"tls handshake",
-		"http://",
-		"https://",
-		"request mapping error:",
-		"response mapping error:",
 		"retry publish failed",
-	}
-	for _, marker := range internalMarkers {
+		"unexpected eof",
+	} {
 		if strings.Contains(lower, marker) {
 			return genericUpstreamErrorMessage
 		}
 	}
-	return trimmed
+
+	// Strip URLs from the message rather than hiding the whole error.
+	result := strings.TrimSpace(urlRegexp.ReplaceAllString(trimmed, ""))
+	if result == "" {
+		return genericUpstreamErrorMessage
+	}
+	return result
 }
