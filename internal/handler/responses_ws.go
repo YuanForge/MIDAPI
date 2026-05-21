@@ -258,6 +258,7 @@ func handleWSResponseCreate(c *gin.Context, conn *websocket.Conn, responseData m
 		CorrID:          corrID,
 		Model:           resolvedModel,
 		IsStream:        true,
+		Transport:       "ws",
 		UpstreamRequest: model.JSON(openAIReq),
 		ClientRequest:   model.JSON(responseData),
 		Status:          "pending",
@@ -489,6 +490,13 @@ func forwardResponsesWS(ctx context.Context, clientConn *websocket.Conn, c *gin.
 				if delta, _ := event["delta"].(string); delta != "" {
 					textBuf.WriteString(delta)
 				}
+			case "response.output_text.done":
+				// 某些上游只在 done 事件里给完整文本，不发 delta。
+				if textBuf.Len() == 0 {
+					if doneText, _ := event["text"].(string); doneText != "" {
+						textBuf.WriteString(doneText)
+					}
+				}
 			case "response.completed":
 				if respObj, ok := event["response"].(map[string]interface{}); ok {
 					if usg, ok := respObj["usage"].(map[string]interface{}); ok {
@@ -523,6 +531,21 @@ func forwardResponsesWS(ctx context.Context, clientConn *websocket.Conn, c *gin.
 
 		if eventType, _ := event["type"].(string); eventType == "response.completed" {
 			break
+		}
+	}
+
+	if usage == nil {
+		// 上游未返回 usage 时，按请求+输出文本估算，避免误判为 no_output 全额退款。
+		prompt := billing.EstimateTokensFromRequest(responseReq)
+		completion := int64(textBuf.Len()/4 + 1)
+		if textBuf.Len() == 0 {
+			completion = 0
+		}
+		usage = map[string]interface{}{
+			"prompt_tokens":     prompt,
+			"completion_tokens": completion,
+			"total_tokens":      prompt + completion,
+			"estimated":         true,
 		}
 	}
 

@@ -88,7 +88,7 @@ func AdminListLLMLogs(c *gin.Context) {
 	defer listSess.Close()
 	var logs []model.LLMLog
 	err = listSess.Cols("id", "user_id", "channel_id", "api_key_id", "corr_id",
-		"model", "is_stream", "upstream_url", "upstream_method",
+		"model", "is_stream", "transport", "upstream_url", "upstream_method",
 		"upstream_status", "usage", "status", "error_msg", "created_at").
 		OrderBy("id DESC").Limit(pageSize, offset).Find(&logs)
 	if err != nil {

@@ -142,6 +142,7 @@ export type AdminLog = {
   cost_charged?: number
   status?: string
   is_stream?: boolean
+  transport?: string
   error_msg?: string
   upstream_status?: number
   upstream_method?: string

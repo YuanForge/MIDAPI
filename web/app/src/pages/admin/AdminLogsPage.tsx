@@ -286,6 +286,15 @@ export function AdminLogsPage() {
                 <InfoItem label="渠道 ID" value={currentLog.channel_id ?? '—'} />
                 <InfoItem label="API Key ID" value={currentLog.api_key_id ?? '—'} />
                 <InfoItem label="流式" value={currentLog.is_stream ? '是' : '否'} />
+                <InfoItem
+                  label="传输协议"
+                  value={
+                    currentLog.transport === 'ws' ? <Badge variant="outline" className="border-blue-300 text-blue-700">WebSocket</Badge>
+                    : currentLog.transport === 'sse' ? <Badge variant="outline" className="border-purple-300 text-purple-700">SSE</Badge>
+                    : currentLog.transport === 'http' ? <Badge variant="outline">HTTP</Badge>
+                    : <span className="text-muted-foreground">—</span>
+                  }
+                />
                 <InfoItem label="Corr ID" value={<div className="font-mono text-xs break-all">{currentLog.corr_id ?? '—'}</div>} className="col-span-2" />
                 <InfoItem label="上游 HTTP 状态" value={currentLog.upstream_status ?? '—'} />
                 <InfoItem label="上游请求方法" value={currentLog.upstream_method ?? 'POST'} />

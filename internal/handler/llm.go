@@ -162,6 +162,23 @@ func (u *usageState) processLine(line string) {
 					}
 				}
 			}
+			// Responses API (response.completed): usage 嵌套在 chunk["response"]["usage"]
+			// 字段名为 input_tokens / output_tokens，缓存命中在 input_tokens_details.cached_tokens
+			if resp, ok := chunk["response"].(map[string]interface{}); ok {
+				if usg, ok := resp["usage"].(map[string]interface{}); ok {
+					if n, _ := usg["input_tokens"].(float64); n > 0 {
+						u.promptTokens = int64(n)
+					}
+					if n, _ := usg["output_tokens"].(float64); n > 0 {
+						u.completTokens = int64(n)
+					}
+					if details, ok := usg["input_tokens_details"].(map[string]interface{}); ok {
+						if n, _ := details["cached_tokens"].(float64); n > 0 {
+							u.cacheReadTokens = int64(n)
+						}
+					}
+				}
+			}
 			// 实时累计输出字符（用户中断时兜底）；同时统计 markdown 图片数量（多模态模型）
 			if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
 				if choice, ok := choices[0].(map[string]interface{}); ok {
@@ -174,6 +191,12 @@ func (u *usageState) processLine(line string) {
 							u.imageCount += int64(strings.Count(content, "data:image/"))
 						}
 					}
+				}
+			}
+			// Responses API (response.output_text.delta): delta 直接是字符串
+			if chunkType, _ := chunk["type"].(string); strings.HasPrefix(chunkType, "response.output_text") {
+				if text, _ := chunk["delta"].(string); text != "" {
+					u.outputChars += int64(len(text))
 				}
 			}
 		}
@@ -681,12 +704,18 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 		upstreamMethod = "POST"
 	}
 	llmLog := &model.LLMLog{
-		UserID:          userID,
-		ChannelID:       channelID,
-		APIKeyID:        apiKeyIDVal,
-		CorrID:          corrID,
-		Model:           modelName,
-		IsStream:        isStream,
+		UserID:    userID,
+		ChannelID: channelID,
+		APIKeyID:  apiKeyIDVal,
+		CorrID:    corrID,
+		Model:     modelName,
+		IsStream:  isStream,
+		Transport: func() string {
+			if isStream {
+				return "sse"
+			}
+			return "http"
+		}(),
 		UpstreamURL:     upstreamURL,
 		UpstreamMethod:  upstreamMethod,
 		UpstreamRequest: model.JSON(mappedReq),
