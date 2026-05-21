@@ -2,9 +2,10 @@
 // OpenAI, Claude (Anthropic), and Gemini (Google) API formats.
 //
 // Conversion matrix (input format → channel protocol):
-//   - OpenAI  → openai  : pass-through (no-op)
-//   - OpenAI  → claude  : ConvertRequest / ConvertSyncResponse
-//   - OpenAI  → gemini  : ConvertRequest / ConvertSyncResponse
+//   - OpenAI  → openai     : pass-through (no-op)
+//   - OpenAI  → claude     : ConvertRequest / ConvertSyncResponse
+//   - OpenAI  → gemini     : ConvertRequest / ConvertSyncResponse
+//   - OpenAI  → responses  : ConvertRequest / ConvertSyncResponse
 //
 // All functions operate on plain map[string]interface{} so they compose
 // cleanly with the existing request_script / response_script JS hooks.
@@ -31,6 +32,8 @@ func ConvertRequest(req map[string]interface{}, targetProtocol string) (map[stri
 		return openAIToClaude(req)
 	case ProtocolGemini:
 		return openAIToGemini(req)
+	case ProtocolResponses:
+		return openAIToResponsesRequest(req)
 	default:
 		return req, nil
 	}
@@ -44,6 +47,8 @@ func ConvertSyncResponse(respBody []byte, sourceProtocol string) ([]byte, error)
 		return claudeToOpenAI(respBody)
 	case ProtocolGemini:
 		return geminiToOpenAI(respBody)
+	case ProtocolResponses:
+		return responsesToOpenAISync(respBody)
 	default:
 		return respBody, nil
 	}
@@ -86,6 +91,16 @@ func NormalizeUsage(resp map[string]interface{}, sourceProtocol string) map[stri
 				result["cache_read_tokens"] = int64(cacheRead)
 			}
 			return result
+		}
+	case ProtocolResponses:
+		if usg, ok := resp["usage"].(map[string]interface{}); ok {
+			in, _ := usg["input_tokens"].(float64)
+			out, _ := usg["output_tokens"].(float64)
+			return map[string]interface{}{
+				"prompt_tokens":     int64(in),
+				"completion_tokens": int64(out),
+				"total_tokens":      int64(in + out),
+			}
 		}
 	default:
 		if usg, ok := resp["usage"].(map[string]interface{}); ok {
@@ -1108,6 +1123,112 @@ func openAIToGeminiResponse(body []byte) ([]byte, error) {
 // Responses API (OpenAI Responses API / Codex CLI)
 // ─────────────────────────────────────────────
 
+// openAIToResponsesRequest converts an OpenAI chat/completions request to
+// OpenAI Responses API request format.
+func openAIToResponsesRequest(req map[string]interface{}) (map[string]interface{}, error) {
+	out := make(map[string]interface{})
+
+	if m, ok := req["model"].(string); ok {
+		out["model"] = m
+	}
+	if s, ok := req["stream"]; ok {
+		out["stream"] = s
+	}
+	if mt, ok := req["max_tokens"]; ok {
+		out["max_output_tokens"] = mt
+	} else if mt, ok := req["max_completion_tokens"]; ok {
+		out["max_output_tokens"] = mt
+	}
+	if t, ok := req["temperature"]; ok {
+		out["temperature"] = t
+	}
+	if tp, ok := req["top_p"]; ok {
+		out["top_p"] = tp
+	}
+
+	var instructions []string
+	input := make([]interface{}, 0)
+
+	if msgs, ok := req["messages"].([]interface{}); ok {
+		for _, m := range msgs {
+			msg, ok := m.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			role, _ := msg["role"].(string)
+			if role == "" {
+				role = "user"
+			}
+
+			if role == "system" {
+				switch c := msg["content"].(type) {
+				case string:
+					if c != "" {
+						instructions = append(instructions, c)
+					}
+				case []interface{}:
+					var sb strings.Builder
+					for _, p := range c {
+						pm, ok := p.(map[string]interface{})
+						if !ok {
+							continue
+						}
+						if text, _ := pm["text"].(string); text != "" {
+							sb.WriteString(text)
+						}
+					}
+					if sb.Len() > 0 {
+						instructions = append(instructions, sb.String())
+					}
+				}
+				continue
+			}
+
+			item := map[string]interface{}{"role": role}
+			switch c := msg["content"].(type) {
+			case string:
+				item["content"] = c
+			case []interface{}:
+				parts := make([]interface{}, 0)
+				for _, p := range c {
+					pm, ok := p.(map[string]interface{})
+					if !ok {
+						continue
+					}
+					pType, _ := pm["type"].(string)
+					if pType == "text" {
+						if text, _ := pm["text"].(string); text != "" {
+							parts = append(parts, map[string]interface{}{
+								"type": "input_text",
+								"text": text,
+							})
+						}
+						continue
+					}
+					parts = append(parts, pm)
+				}
+				item["content"] = parts
+			default:
+				item["content"] = c
+			}
+			input = append(input, item)
+		}
+	}
+
+	if len(instructions) > 0 {
+		out["instructions"] = strings.Join(instructions, "\n\n")
+	}
+	if len(input) > 0 {
+		out["input"] = input
+	}
+
+	if tools, ok := req["tools"].([]interface{}); ok && len(tools) > 0 {
+		out["tools"] = tools
+	}
+
+	return out, nil
+}
+
 // responsesToOpenAI converts an OpenAI Responses API request to OpenAI chat/completions format.
 // Responses API fields: model, input (string | array), instructions, stream, max_output_tokens, tools
 func responsesToOpenAI(req map[string]interface{}) (map[string]interface{}, error) {
@@ -1262,5 +1383,75 @@ func openAIToResponsesSync(body []byte) ([]byte, error) {
 			"output_tokens": outputTokens,
 		},
 	}
+	return json.Marshal(out)
+}
+
+// responsesToOpenAISync converts an OpenAI Responses API sync response to
+// OpenAI chat/completions format.
+func responsesToOpenAISync(body []byte) ([]byte, error) {
+	var resp map[string]interface{}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return body, nil
+	}
+
+	id, _ := resp["id"].(string)
+	modelName, _ := resp["model"].(string)
+
+	var textBuilder strings.Builder
+	if output, ok := resp["output"].([]interface{}); ok {
+		for _, item := range output {
+			im, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			content, _ := im["content"].([]interface{})
+			for _, part := range content {
+				pm, ok := part.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				partType, _ := pm["type"].(string)
+				if partType == "output_text" || partType == "text" || partType == "input_text" {
+					if t, _ := pm["text"].(string); t != "" {
+						textBuilder.WriteString(t)
+					}
+				}
+			}
+		}
+	}
+
+	promptTokens := int64(0)
+	completionTokens := int64(0)
+	if usg, ok := resp["usage"].(map[string]interface{}); ok {
+		if pt, ok := usg["input_tokens"].(float64); ok {
+			promptTokens = int64(pt)
+		}
+		if ct, ok := usg["output_tokens"].(float64); ok {
+			completionTokens = int64(ct)
+		}
+	}
+
+	out := map[string]interface{}{
+		"id":      id,
+		"object":  "chat.completion",
+		"created": resp["created_at"],
+		"model":   modelName,
+		"choices": []interface{}{
+			map[string]interface{}{
+				"index": 0,
+				"message": map[string]interface{}{
+					"role":    "assistant",
+					"content": textBuilder.String(),
+				},
+				"finish_reason": "stop",
+			},
+		},
+		"usage": map[string]interface{}{
+			"prompt_tokens":     promptTokens,
+			"completion_tokens": completionTokens,
+			"total_tokens":      promptTokens + completionTokens,
+		},
+	}
+
 	return json.Marshal(out)
 }

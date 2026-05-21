@@ -1076,6 +1076,7 @@ export function AdminChannelsPage() {
                     <option value="openai">openai</option>
                     <option value="claude">claude</option>
                     <option value="gemini">gemini</option>
+                    <option value="responses">responses</option>
                   </NativeSelect>
                 </div>
                 <div className="space-y-2 md:col-span-2">

@@ -11,17 +11,21 @@ package handler
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
+	"time"
 
 	"fanapi/internal/billing"
 	"fanapi/internal/db"
 	"fanapi/internal/model"
 	"fanapi/internal/protocol"
+	"fanapi/internal/script"
 	"fanapi/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -117,27 +121,13 @@ func handleWSResponseCreate(c *gin.Context, conn *websocket.Conn, responseData m
 	// 始终启用流式（WS 模式仅支持 stream）
 	responseData["stream"] = true
 
-	// Responses API → OpenAI Chat Completions
-	openAIReq, convErr := protocol.NormalizeClientRequest(responseData, protocol.ProtocolResponses)
-	if convErr != nil {
-		return convErr
-	}
-	openAIReq["stream"] = true
-
-	// 注入 stream_options include_usage（供计费）
-	if _, hasOpts := openAIReq["stream_options"]; !hasOpts {
-		openAIReq["stream_options"] = map[string]interface{}{"include_usage": true}
-	} else if opts, ok := openAIReq["stream_options"].(map[string]interface{}); ok {
-		opts["include_usage"] = true
-	}
-
 	// 余额前置检查
 	if bal, balErr := billing.GetBalance(c.Request.Context(), userID); balErr == nil && bal <= 0 {
 		return fmt.Errorf("余额不足，请充值后继续使用")
 	}
 
 	// 渠道选择
-	routingKey, _ := openAIReq["model"].(string)
+	routingKey, _ := responseData["model"].(string)
 	if routingKey == "" {
 		routingKey, _ = responseData["model"].(string)
 	}
@@ -153,17 +143,9 @@ func handleWSResponseCreate(c *gin.Context, conn *websocket.Conn, responseData m
 		}
 	}
 
-	// 使用渠道配置的真实模型名
+	resolvedModel := routingKey
 	if ch.Model != "" {
-		openAIReq["model"] = ch.Model
-	}
-	resolvedModel, _ := openAIReq["model"].(string)
-	proto := effectiveProtocol(ch)
-
-	// 保存原始请求（用于计费估算）
-	origReqData := make(map[string]interface{}, len(openAIReq))
-	for k, v := range openAIReq {
-		origReqData[k] = v
+		resolvedModel = ch.Model
 	}
 
 	// 号池 Key 分配
@@ -178,6 +160,46 @@ func handleWSResponseCreate(c *gin.Context, conn *websocket.Conn, responseData m
 			poolKey = pk
 			poolKeyIDVal = pk.ID
 		}
+	}
+
+	proto := effectiveProtocol(ch)
+	upstreamWSURL := resolveUpstreamWSURL(ch, resolvedModel, poolKey)
+	useUpstreamWS := upstreamWSURL != "" && proto == protocolResponses
+
+	var openAIReq map[string]interface{}
+	if !useUpstreamWS {
+		// 非上游 WS 直连时走现有链路：Responses API → OpenAI Chat Completions
+		var convErr error
+		openAIReq, convErr = protocol.NormalizeClientRequest(responseData, protocol.ProtocolResponses)
+		if convErr != nil {
+			return convErr
+		}
+		openAIReq["stream"] = true
+		if ch.Model != "" {
+			openAIReq["model"] = ch.Model
+		}
+		// 注入 stream_options include_usage（供计费）
+		if _, hasOpts := openAIReq["stream_options"]; !hasOpts {
+			openAIReq["stream_options"] = map[string]interface{}{"include_usage": true}
+		} else if opts, ok := openAIReq["stream_options"].(map[string]interface{}); ok {
+			opts["include_usage"] = true
+		}
+	} else {
+		// 上游 WS 直连：保持 Responses API 格式，必要时仅覆盖 model
+		openAIReq = make(map[string]interface{}, len(responseData)+1)
+		for k, v := range responseData {
+			openAIReq[k] = v
+		}
+		openAIReq["stream"] = true
+		if resolvedModel != "" {
+			openAIReq["model"] = resolvedModel
+		}
+	}
+
+	// 保存原始请求（用于计费估算）
+	origReqData := make(map[string]interface{}, len(openAIReq))
+	for k, v := range openAIReq {
+		origReqData[k] = v
 	}
 
 	// 计费预扣
@@ -242,106 +264,323 @@ func handleWSResponseCreate(c *gin.Context, conn *websocket.Conn, responseData m
 	}
 	_, _ = db.Engine.Insert(llmLog)
 
-	// 发送上游请求（强制流式）
-	_, resp, reqErr := sendLLMRequest(c, ch, openAIReq, poolKey, proto, resolvedModel, true)
-	if reqErr != nil {
-		service.RecordChannelError(c.Request.Context(), ch.ID)
-		refundHold("upstream_error")
-		if totalHold > 0 {
-			_ = service.WriteTx(c.Request.Context(), userID, ch.ID, apiKeyIDVal, poolKeyIDVal, corrID, "refund", totalHold, upstreamCostHold, modelCreditCharged, model.JSON{"reason": "upstream_error"})
-		}
-		_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("status", "error_msg").
-			Update(&model.LLMLog{Status: "error", ErrorMsg: reqErr.Error()})
-		return reqErr
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		bodyErr, _ := io.ReadAll(resp.Body)
-		service.RecordChannelError(c.Request.Context(), ch.ID)
-		refundHold("upstream_error")
-		if totalHold > 0 {
-			_ = service.WriteTx(c.Request.Context(), userID, ch.ID, apiKeyIDVal, poolKeyIDVal, corrID, "refund", totalHold, upstreamCostHold, modelCreditCharged, model.JSON{"reason": "upstream_error"})
-		}
-		_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("status", "upstream_status", "error_msg").
-			Update(&model.LLMLog{Status: "error", UpstreamStatus: resp.StatusCode, ErrorMsg: string(bodyErr)})
-		return fmt.Errorf("上游返回 %d: %s", resp.StatusCode, string(bodyErr))
-	}
-
-	service.RecordChannelSuccess(c.Request.Context(), ch.ID)
-
-	// 流式 SSE → Responses API WS 事件
-	usg := &usageState{protocol: proto}
-	sseConv := protocol.NewSSEConverter(proto, protocol.ProtocolResponses)
-
-	const maxSSELogBytes = 200 * 1024
-	var rawSSELines []string
-	var rawSSEBytes int
-
-	scanner := bufio.NewScanner(resp.Body)
-	wsError := false
-	for scanner.Scan() {
-		line := scanner.Text()
-		usg.processLine(line)
-		if rawSSEBytes < maxSSELogBytes {
-			rawSSELines = append(rawSSELines, line)
-			rawSSEBytes += len(line) + 1
-		}
-
-		var outLines []string
-		if sseConv != nil {
-			outLines = sseConv.Convert(line)
-		} else {
-			// 上游协议 == responses 时直接透传（不常见，保留兜底）
-			outLines = []string{line}
-		}
-		for _, l := range outLines {
-			if !strings.HasPrefix(l, "data: ") {
-				continue
+	var usageForSettle map[string]interface{}
+	if useUpstreamWS {
+		usageWS, rawWSMessages, clientResp, wsErr := forwardResponsesWS(c.Request.Context(), conn, c, ch, poolKey, upstreamWSURL, openAIReq)
+		if wsErr != nil {
+			service.RecordChannelError(c.Request.Context(), ch.ID)
+			refundHold("upstream_error")
+			if totalHold > 0 {
+				_ = service.WriteTx(c.Request.Context(), userID, ch.ID, apiKeyIDVal, poolKeyIDVal, corrID, "refund", totalHold, upstreamCostHold, modelCreditCharged, model.JSON{"reason": "upstream_error"})
 			}
-			data := strings.TrimPrefix(l, "data: ")
-			if data == "[DONE]" {
-				continue
+			_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("status", "error_msg").
+				Update(&model.LLMLog{Status: "error", ErrorMsg: wsErr.Error()})
+			return wsErr
+		}
+		service.RecordChannelSuccess(c.Request.Context(), ch.ID)
+		_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("upstream_status", "upstream_response", "client_response").
+			Update(&model.LLMLog{
+				UpstreamStatus:   http.StatusOK,
+				UpstreamResponse: model.JSON{"messages": rawWSMessages},
+				ClientResponse:   clientResp,
+			})
+		usageForSettle = usageWS
+	} else {
+		// 发送上游请求（强制流式）
+		_, resp, reqErr := sendLLMRequest(c, ch, openAIReq, poolKey, proto, resolvedModel, true)
+		if reqErr != nil {
+			service.RecordChannelError(c.Request.Context(), ch.ID)
+			refundHold("upstream_error")
+			if totalHold > 0 {
+				_ = service.WriteTx(c.Request.Context(), userID, ch.ID, apiKeyIDVal, poolKeyIDVal, corrID, "refund", totalHold, upstreamCostHold, modelCreditCharged, model.JSON{"reason": "upstream_error"})
 			}
-			if writeErr := conn.WriteMessage(websocket.TextMessage, []byte(data)); writeErr != nil {
-				wsError = true
+			_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("status", "error_msg").
+				Update(&model.LLMLog{Status: "error", ErrorMsg: reqErr.Error()})
+			return reqErr
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			bodyErr, _ := io.ReadAll(resp.Body)
+			service.RecordChannelError(c.Request.Context(), ch.ID)
+			refundHold("upstream_error")
+			if totalHold > 0 {
+				_ = service.WriteTx(c.Request.Context(), userID, ch.ID, apiKeyIDVal, poolKeyIDVal, corrID, "refund", totalHold, upstreamCostHold, modelCreditCharged, model.JSON{"reason": "upstream_error"})
+			}
+			_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("status", "upstream_status", "error_msg").
+				Update(&model.LLMLog{Status: "error", UpstreamStatus: resp.StatusCode, ErrorMsg: string(bodyErr)})
+			return fmt.Errorf("上游返回 %d: %s", resp.StatusCode, string(bodyErr))
+		}
+
+		service.RecordChannelSuccess(c.Request.Context(), ch.ID)
+
+		// 流式 SSE → Responses API WS 事件
+		usg := &usageState{protocol: proto}
+		sseConv := protocol.NewSSEConverter(proto, protocol.ProtocolResponses)
+
+		const maxSSELogBytes = 200 * 1024
+		var rawSSELines []string
+		var rawSSEBytes int
+
+		scanner := bufio.NewScanner(resp.Body)
+		wsError := false
+		for scanner.Scan() {
+			line := scanner.Text()
+			usg.processLine(line)
+			if rawSSEBytes < maxSSELogBytes {
+				rawSSELines = append(rawSSELines, line)
+				rawSSEBytes += len(line) + 1
+			}
+
+			var outLines []string
+			if sseConv != nil {
+				outLines = sseConv.Convert(line)
+			} else {
+				// 上游协议 == responses 时直接透传（不常见，保留兜底）
+				outLines = []string{line}
+			}
+			for _, l := range outLines {
+				if !strings.HasPrefix(l, "data: ") {
+					continue
+				}
+				data := strings.TrimPrefix(l, "data: ")
+				if data == "[DONE]" {
+					continue
+				}
+				if writeErr := conn.WriteMessage(websocket.TextMessage, []byte(data)); writeErr != nil {
+					wsError = true
+					break
+				}
+			}
+			if wsError {
 				break
 			}
 		}
-		if wsError {
-			break
-		}
-	}
 
-	// 冲刷 SSE 转换器末尾事件（response.completed 等）
-	if !wsError && sseConv != nil {
-		for _, l := range sseConv.Flush() {
-			if !strings.HasPrefix(l, "data: ") {
-				continue
+		// 冲刷 SSE 转换器末尾事件（response.completed 等）
+		if !wsError && sseConv != nil {
+			for _, l := range sseConv.Flush() {
+				if !strings.HasPrefix(l, "data: ") {
+					continue
+				}
+				data := strings.TrimPrefix(l, "data: ")
+				if data == "[DONE]" {
+					continue
+				}
+				_ = conn.WriteMessage(websocket.TextMessage, []byte(data))
 			}
-			data := strings.TrimPrefix(l, "data: ")
-			if data == "[DONE]" {
-				continue
-			}
-			_ = conn.WriteMessage(websocket.TextMessage, []byte(data))
 		}
-	}
 
-	// 日志回写
-	_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("upstream_status", "upstream_response", "client_response").
-		Update(&model.LLMLog{
-			UpstreamStatus:   http.StatusOK,
-			UpstreamResponse: model.JSON{"lines": rawSSELines},
-			ClientResponse:   buildStreamClientResponse(rawSSELines, proto),
-		})
+		// 日志回写
+		_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("upstream_status", "upstream_response", "client_response").
+			Update(&model.LLMLog{
+				UpstreamStatus:   http.StatusOK,
+				UpstreamResponse: model.JSON{"lines": rawSSELines},
+				ClientResponse:   buildStreamClientResponse(rawSSELines, proto),
+			})
+		usageForSettle = usg.normalized(origReqData)
+	}
 
 	// 将预扣/退款状态写入 gin context 供 llmSettle 内部 llmRefundCredits 读取
 	c.Set("model_credit_routing_key", routingKey)
 	c.Set("model_credit_charged", modelCreditCharged)
 	c.Set("model_credit_general_charged", generalCreditCharged)
 
-	llmSettle(c, ch, origReqData, usg.normalized(origReqData), totalHold, userID, ch.ID, apiKeyIDVal, poolKeyIDVal, corrID, userGroup)
+	llmSettle(c, ch, origReqData, usageForSettle, totalHold, userID, ch.ID, apiKeyIDVal, poolKeyIDVal, corrID, userGroup)
 	return nil
+}
+
+func forwardResponsesWS(ctx context.Context, clientConn *websocket.Conn, c *gin.Context, ch *model.Channel, poolKey *model.PoolKey, upstreamWSURL string, responseReq map[string]interface{}) (map[string]interface{}, []string, model.JSON, error) {
+	timeout := time.Duration(ch.TimeoutMs) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
+
+	poolKeyVal := ""
+	if poolKey != nil {
+		poolKeyVal = poolKey.Value
+	}
+	targetURL := script.ResolveHeaderValue(upstreamWSURL, poolKeyVal)
+
+	dialHeader := http.Header{}
+	if ch.PassthroughHeaders {
+		passthroughSkip := map[string]bool{
+			"Authorization":     true,
+			"Host":              true,
+			"Content-Length":    true,
+			"Transfer-Encoding": true,
+			"Connection":        true,
+			"Upgrade":           true,
+			"Proxy-Connection":  true,
+		}
+		for k, vals := range c.Request.Header {
+			if !passthroughSkip[k] {
+				dialHeader[k] = vals
+			}
+		}
+	}
+	for k, v := range ch.Headers {
+		// 该自定义头仅用于本地配置上游WS地址，不能透传给第三方。
+		if strings.EqualFold(k, "x-upstream-ws-url") {
+			continue
+		}
+		if sv, ok := v.(string); ok {
+			dialHeader.Set(k, script.ResolveHeaderValue(sv, poolKeyVal))
+		}
+	}
+
+	if parsed, err := url.Parse(targetURL); err == nil {
+		if parsed.Scheme != "ws" && parsed.Scheme != "wss" {
+			return nil, nil, nil, fmt.Errorf("上游 URL 不是 WebSocket: %s", targetURL)
+		}
+	}
+
+	dialer := websocket.Dialer{HandshakeTimeout: timeout}
+	upConn, _, err := dialer.DialContext(ctx, targetURL, dialHeader)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	defer upConn.Close()
+
+	reqBody := make(map[string]interface{}, len(responseReq)+1)
+	for k, v := range responseReq {
+		reqBody[k] = v
+	}
+	reqBody["stream"] = true
+
+	createMsg := map[string]interface{}{
+		"type":     "response.create",
+		"response": reqBody,
+	}
+	createBytes, _ := json.Marshal(createMsg)
+	if err := upConn.WriteMessage(websocket.TextMessage, createBytes); err != nil {
+		return nil, nil, nil, err
+	}
+
+	const maxWSLogBytes = 200 * 1024
+	var rawMessages []string
+	rawBytes := 0
+	var textBuf strings.Builder
+	var usage map[string]interface{}
+
+	for {
+		msgType, msgBytes, readErr := upConn.ReadMessage()
+		if readErr != nil {
+			if websocket.IsCloseError(readErr, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				break
+			}
+			return usage, rawMessages, toWSClientResp(textBuf.String()), readErr
+		}
+		if msgType != websocket.TextMessage {
+			continue
+		}
+
+		msgStr := string(msgBytes)
+		if rawBytes < maxWSLogBytes {
+			rawMessages = append(rawMessages, msgStr)
+			rawBytes += len(msgStr) + 1
+		}
+
+		var event map[string]interface{}
+		if json.Unmarshal(msgBytes, &event) == nil {
+			typeVal, _ := event["type"].(string)
+			switch typeVal {
+			case "response.output_text.delta":
+				if delta, _ := event["delta"].(string); delta != "" {
+					textBuf.WriteString(delta)
+				}
+			case "response.completed":
+				if respObj, ok := event["response"].(map[string]interface{}); ok {
+					if usg, ok := respObj["usage"].(map[string]interface{}); ok {
+						pt := int64(0)
+						ct := int64(0)
+						if n, ok := usg["input_tokens"].(float64); ok {
+							pt = int64(n)
+						}
+						if n, ok := usg["output_tokens"].(float64); ok {
+							ct = int64(n)
+						}
+						usage = map[string]interface{}{
+							"prompt_tokens":     pt,
+							"completion_tokens": ct,
+							"total_tokens":      pt + ct,
+						}
+					}
+				}
+			case "error":
+				if errObj, ok := event["error"].(map[string]interface{}); ok {
+					if msg, _ := errObj["message"].(string); msg != "" {
+						_ = clientConn.WriteMessage(websocket.TextMessage, msgBytes)
+						return usage, rawMessages, toWSClientResp(textBuf.String()), fmt.Errorf("上游错误: %s", msg)
+					}
+				}
+			}
+		}
+
+		if writeErr := clientConn.WriteMessage(websocket.TextMessage, msgBytes); writeErr != nil {
+			return usage, rawMessages, toWSClientResp(textBuf.String()), writeErr
+		}
+
+		if eventType, _ := event["type"].(string); eventType == "response.completed" {
+			break
+		}
+	}
+
+	return usage, rawMessages, toWSClientResp(textBuf.String()), nil
+}
+
+func resolveUpstreamWSURL(ch *model.Channel, resolvedModel string, poolKey *model.PoolKey) string {
+	poolKeyVal := ""
+	if poolKey != nil {
+		poolKeyVal = poolKey.Value
+	}
+
+	// 允许在渠道 Headers 中显式指定上游 WS 地址：x-upstream-ws-url
+	for k, v := range ch.Headers {
+		if !strings.EqualFold(k, "x-upstream-ws-url") {
+			continue
+		}
+		s, ok := v.(string)
+		if !ok || strings.TrimSpace(s) == "" {
+			continue
+		}
+		u := strings.TrimSpace(script.ResolveHeaderValue(s, poolKeyVal))
+		if resolvedModel != "" {
+			u = strings.ReplaceAll(u, "{model}", resolvedModel)
+		}
+		if strings.HasPrefix(strings.ToLower(u), "ws://") || strings.HasPrefix(strings.ToLower(u), "wss://") {
+			return u
+		}
+	}
+
+	base := ch.BaseURL
+	if resolvedModel != "" {
+		base = strings.ReplaceAll(base, "{model}", resolvedModel)
+	}
+	base = strings.TrimSpace(script.ResolveHeaderValue(base, poolKeyVal))
+	if base == "" {
+		return ""
+	}
+
+	lower := strings.ToLower(base)
+	if strings.HasPrefix(lower, "ws://") || strings.HasPrefix(lower, "wss://") {
+		return base
+	}
+	// 单渠道双协议：HTTP 走 base_url；WS 自动推导同路径 wss/ws 地址。
+	if strings.HasPrefix(lower, "https://") {
+		return "wss://" + base[len("https://"):]
+	}
+	if strings.HasPrefix(lower, "http://") {
+		return "ws://" + base[len("http://"):]
+	}
+	return ""
+}
+
+func toWSClientResp(content string) model.JSON {
+	if content == "" {
+		return nil
+	}
+	return model.JSON{"content": content, "stream": true}
 }
 
 // sendWSResponseError 向客户端发送 Responses API 格式错误事件。
