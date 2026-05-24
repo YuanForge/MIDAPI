@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -103,7 +104,8 @@ func GetTask(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, buildTaskResult(task))
+	rewrite := getTaskResultURLRewrite()
+	c.JSON(http.StatusOK, buildTaskResult(task, rewrite))
 }
 
 // GET /admin/tasks
@@ -203,8 +205,9 @@ func ListUserTasks(c *gin.Context) {
 	}
 
 	results := make([]model.TaskResult, 0, len(tasks))
+	rewrite := getTaskResultURLRewrite()
 	for i := range tasks {
-		results = append(results, buildTaskResult(&tasks[i]))
+		results = append(results, buildTaskResult(&tasks[i], rewrite))
 	}
 	c.JSON(http.StatusOK, gin.H{"tasks": results, "total": total})
 }
@@ -245,8 +248,108 @@ func GetAdminTask(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "任务不存在"})
 		return
 	}
+	applyAdminResultProxyRewrite(task)
 	enrichAdminUpstreamRequest(task)
 	c.JSON(http.StatusOK, gin.H{"task": task})
+}
+
+// applyAdminResultProxyRewrite 按系统配置重写管理端任务结果中的 URL 前缀。
+// 仅影响返回值，不改写数据库中的原始 task.result。
+func applyAdminResultProxyRewrite(task *model.Task) {
+	if task == nil || len(task.Result) == 0 {
+		return
+	}
+	rewrite := getTaskResultURLRewrite()
+	if rewrite == nil {
+		return
+	}
+
+	copied := cloneJSON(task.Result)
+	task.Result = rewriteJSONStrings(copied, rewrite)
+}
+
+func getTaskResultURLRewrite() func(string) string {
+	from := strings.TrimSpace(getSettingValue("result_url_proxy_from"))
+	to := strings.TrimSpace(getSettingValue("result_url_proxy_to"))
+	if from == "" || to == "" {
+		return nil
+	}
+	to = strings.TrimRight(to, "/")
+	from = strings.TrimRight(from, "/")
+	return compilePrefixRewrite(from, to)
+}
+
+func cloneJSON(src model.JSON) model.JSON {
+	if src == nil {
+		return nil
+	}
+	dst := make(model.JSON, len(src))
+	for k, v := range src {
+		dst[k] = cloneAny(v)
+	}
+	return dst
+}
+
+func cloneAny(v interface{}) interface{} {
+	switch vv := v.(type) {
+	case map[string]interface{}:
+		m := make(map[string]interface{}, len(vv))
+		for k, x := range vv {
+			m[k] = cloneAny(x)
+		}
+		return m
+	case []interface{}:
+		a := make([]interface{}, len(vv))
+		for i := range vv {
+			a[i] = cloneAny(vv[i])
+		}
+		return a
+	default:
+		return vv
+	}
+}
+
+func compilePrefixRewrite(from, to string) func(string) string {
+	pat := "^" + regexp.QuoteMeta(from) + "(/|$)"
+	re := regexp.MustCompile(pat)
+	return func(s string) string {
+		if !re.MatchString(s) {
+			return s
+		}
+		return re.ReplaceAllString(s, to+"$1")
+	}
+}
+
+func rewriteJSONStrings(src model.JSON, rewrite func(string) string) model.JSON {
+	if src == nil {
+		return nil
+	}
+	out := make(model.JSON, len(src))
+	for k, v := range src {
+		out[k] = rewriteAny(v, rewrite)
+	}
+	return out
+}
+
+func rewriteAny(v interface{}, rewrite func(string) string) interface{} {
+	switch vv := v.(type) {
+	case string:
+		return rewrite(vv)
+	case map[string]interface{}:
+		m := make(map[string]interface{}, len(vv))
+		for k, x := range vv {
+			m[k] = rewriteAny(x, rewrite)
+		}
+		return m
+	case []interface{}:
+		a := make([]interface{}, len(vv))
+		for i := range vv {
+			a[i] = rewriteAny(vv[i], rewrite)
+		}
+		return a
+	default:
+		return vv
+	}
 }
 
 // enrichAdminUpstreamRequest 在历史数据未记录首发请求时，按当前渠道配置兜底重建，
@@ -353,7 +456,12 @@ func enrichAdminUpstreamRequest(task *model.Task) {
 // buildTaskResult 根据 task 状态组装标准 TaskResult。
 // done 状态直接从 task.Result 里读取（response_script 已映射好），
 // 其余状态由平台合成，不依赖上游响应。
-func buildTaskResult(task *model.Task) model.TaskResult {
+func buildTaskResult(task *model.Task, rewrite func(string) string) model.TaskResult {
+	result := task.Result
+	if rewrite != nil && len(task.Result) > 0 {
+		result = rewriteJSONStrings(cloneJSON(task.Result), rewrite)
+	}
+
 	base := model.TaskResult{
 		TaskID:         task.ID,
 		TaskType:       task.Type,
@@ -361,7 +469,7 @@ func buildTaskResult(task *model.Task) model.TaskResult {
 		CreditsCharged: task.CreditsCharged,
 		CreatedAt:      task.CreatedAt,
 		Request:        task.Request, // 原始请求参数
-		Result:         task.Result,  // 映射后的响应结果
+		Result:         result,       // 映射后的响应结果
 	}
 	switch task.Status {
 	case "pending":
@@ -380,25 +488,25 @@ func buildTaskResult(task *model.Task) model.TaskResult {
 		t := task.UpdatedAt
 		base.FinishedAt = &t
 		code := 200
-		if v, ok := task.Result["code"]; ok {
+		if v, ok := result["code"]; ok {
 			if n, ok := toInt(v); ok {
 				code = n
 			}
 		}
 		statusVal := 2
-		if v, ok := task.Result["status"]; ok {
+		if v, ok := result["status"]; ok {
 			if n, ok := toInt(v); ok {
 				statusVal = n
 			}
 		}
-		url, _ := task.Result["url"].(string)
-		msg, _ := task.Result["msg"].(string)
+		url, _ := result["url"].(string)
+		msg, _ := result["msg"].(string)
 		base.Code = code
 		base.Status = statusVal
 		base.URL = url
 		base.Msg = msg
 		// 多结果任务（如音乐每次生成两首）
-		if items, ok := task.Result["items"]; ok {
+		if items, ok := result["items"]; ok {
 			if arr, ok := items.([]interface{}); ok {
 				base.Items = arr
 			}
