@@ -278,17 +278,6 @@ func (c *claudeToOpenAISSE) emitFinishChunk(reason string, outputTokens int64) [
 // Gemini SSE → OpenAI SSE
 // ─────────────────────────────────────────────
 
-// isThoughtPart 判断 Gemini part 是否为思考链内容（thought=true 或含 thoughtSignature 字段）。
-// 思考链内容不应转发给客户端。
-func isThoughtPart(pm map[string]interface{}) bool {
-	if thought, ok := pm["thought"].(bool); ok && thought {
-		return true
-	}
-	if _, ok := pm["thoughtSignature"]; ok {
-		return true
-	}
-	return false
-}
 
 type geminiToOpenAISSE struct {
 	doneSent bool
@@ -316,7 +305,7 @@ func (g *geminiToOpenAISSE) Convert(line string) []string {
 					for _, p := range parts {
 						if pm, ok := p.(map[string]interface{}); ok {
 							// 跳过思考链 part（thought=true 或含 thoughtSignature 字段）
-							if isThoughtPart(pm) {
+							if isGeminiThoughtPart(pm) {
 								continue
 							}
 							if t, ok := pm["text"].(string); ok {
