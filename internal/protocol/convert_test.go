@@ -1,6 +1,10 @@
 package protocol
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
 
 func TestResponsesToOpenAIChatCompletionsMessagesCompatible(t *testing.T) {
 	req := map[string]interface{}{
@@ -293,3 +297,77 @@ func TestResponsesMessagesRoundTripToResponses(t *testing.T) {
 	}
 }
 
+func TestConvertSSEToSyncResponseOpenAI(t *testing.T) {
+	body := []byte(strings.Join([]string{
+		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","created":1780104624,"model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`,
+		``,
+		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","created":1780104624,"model":"gpt-test","choices":[{"index":0,"delta":{"content":"你"},"finish_reason":null}]}`,
+		``,
+		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","created":1780104624,"model":"gpt-test","choices":[{"index":0,"delta":{"content":"好"},"finish_reason":null}]}`,
+		``,
+		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","created":1780104624,"model":"gpt-test","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}`,
+		``,
+		`data: [DONE]`,
+		``,
+	}, "\n"))
+
+	converted, detected, err := ConvertSSEToSyncResponse(body, ProtocolOpenAI)
+	if err != nil {
+		t.Fatalf("ConvertSSEToSyncResponse returned error: %v", err)
+	}
+	if !detected {
+		t.Fatal("expected SSE body to be detected")
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(converted, &resp); err != nil {
+		t.Fatalf("converted body is not JSON: %v\n%s", err, string(converted))
+	}
+	choices, _ := resp["choices"].([]interface{})
+	choice, _ := choices[0].(map[string]interface{})
+	message, _ := choice["message"].(map[string]interface{})
+	if message["content"] != "你好" {
+		t.Fatalf("expected aggregated content, got %#v", message["content"])
+	}
+	usage, _ := resp["usage"].(map[string]interface{})
+	if usage["total_tokens"].(float64) != 5 {
+		t.Fatalf("expected usage preserved, got %#v", usage)
+	}
+}
+
+func TestConvertSSEToSyncResponseResponses(t *testing.T) {
+	body := []byte(strings.Join([]string{
+		`event: response.created`,
+		`data: {"type":"response.created","response":{"id":"resp_1","object":"response","created_at":1780104624,"status":"in_progress","model":"gpt-test","output":[]}}`,
+		``,
+		`event: response.output_text.delta`,
+		`data: {"type":"response.output_text.delta","delta":"你好"}`,
+		``,
+		`event: response.completed`,
+		`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","created_at":1780104624,"status":"completed","model":"gpt-test","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}}`,
+		``,
+	}, "\n"))
+
+	converted, detected, err := ConvertSSEToSyncResponse(body, ProtocolResponses)
+	if err != nil {
+		t.Fatalf("ConvertSSEToSyncResponse returned error: %v", err)
+	}
+	if !detected {
+		t.Fatal("expected SSE body to be detected")
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(converted, &resp); err != nil {
+		t.Fatalf("converted body is not JSON: %v\n%s", err, string(converted))
+	}
+	if resp["status"] != "completed" {
+		t.Fatalf("expected completed status, got %#v", resp["status"])
+	}
+	output, _ := resp["output"].([]interface{})
+	item, _ := output[0].(map[string]interface{})
+	content, _ := item["content"].([]interface{})
+	part, _ := content[0].(map[string]interface{})
+	if part["text"] != "你好" {
+		t.Fatalf("expected output text from deltas, got %#v", part["text"])
+	}
+}

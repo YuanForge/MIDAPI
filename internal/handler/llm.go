@@ -919,6 +919,14 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 	// ---- 同步响应 ----
 	if !isStream {
 		respBytes, _ := io.ReadAll(resp.Body)
+		if converted, detected, convErr := protocol.ConvertSSEToSyncResponse(respBytes, proto); detected {
+			if convErr != nil {
+				service.RecordChannelError(c.Request.Context(), channelID)
+				llmRefundAndAbort(c, corrID, userID, totalHold, upstreamCostHold, poolKeyIDVal, http.StatusOK, "上游响应格式错误: "+convErr.Error())
+				return
+			}
+			respBytes = converted
+		}
 
 		// 先解析原始上游响应（格式与 proto 一致），用于 usage 提取、error_script 检测和日志记录。
 		// 必须在协议转换之前解析，否则 Claude/Gemini 的 usage 字段名会被改写为 OpenAI 格式，

@@ -184,7 +184,7 @@ func GetUserPortrait(c *gin.Context) {
 	engine := db.Engine
 	since := time.Now().AddDate(0, 0, -30)
 
-	// 30 天每日消费（credits）
+	// 30 天每日消费（CNY）
 	type dayRow struct {
 		Day    string  `json:"day" xorm:"day"`
 		Amount float64 `json:"amount" xorm:"amount"`
@@ -192,11 +192,11 @@ func GetUserPortrait(c *gin.Context) {
 	var daily []dayRow
 	engine.SQL(
 		`SELECT TO_CHAR(DATE_TRUNC('day', created_at AT TIME ZONE 'Asia/Shanghai'), 'MM-DD') AS day,
-		        COALESCE(SUM(credits), 0)::float8 AS amount
+		        COALESCE(SUM(credits), 0)::float8 / $3 AS amount
 		 FROM billing_transactions WHERE user_id=$1 AND created_at>=$2 AND type IN ('charge','settle')
 		 GROUP BY DATE_TRUNC('day', created_at AT TIME ZONE 'Asia/Shanghai')
 		 ORDER BY DATE_TRUNC('day', created_at AT TIME ZONE 'Asia/Shanghai')`,
-		id, since,
+		id, since, creditsPerCNY,
 	).Find(&daily)
 
 	// TOP5 模型
@@ -440,6 +440,11 @@ func GetTransactionAggregate(c *gin.Context) {
 	if err := engine.SQL(sql, args...).Find(&rows); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+	for i := range rows {
+		rows[i].Revenue /= creditsPerCNY
+		rows[i].Cost /= creditsPerCNY
+		rows[i].Profit /= creditsPerCNY
 	}
 	c.JSON(http.StatusOK, gin.H{"rows": rows, "dim": dim})
 }
