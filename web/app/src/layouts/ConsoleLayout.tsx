@@ -169,6 +169,7 @@ export function ConsoleLayout({
   const isLoggedIn = !!getRoleToken(role)
   const displayName = identity?.label
   const isFullBleedPage = role === 'user' && location.pathname === '/docs'
+  const isWidePage = role === 'admin' && location.pathname === '/admin/llm-logs'
 
   // Build nav groups from either `groups` or flat `items`, filter auth-gated when not logged in
   const rawGroups: NavGroup[] = groups ?? (subtitle ? [{ label: subtitle, items }] : [{ items }])
@@ -323,7 +324,13 @@ export function ConsoleLayout({
           />
         ) : null}
         <main className={isFullBleedPage ? 'flex-1 px-0 py-0' : 'flex-1 px-4 py-6 md:px-6'}>
-          <div className={isFullBleedPage ? 'flex w-full flex-col' : 'mx-auto flex w-full max-w-7xl flex-col gap-6'}>
+          <div className={
+            isFullBleedPage
+              ? 'flex w-full flex-col'
+              : isWidePage
+                ? 'flex w-full flex-col gap-6'
+                : 'mx-auto flex w-full max-w-7xl flex-col gap-6'
+          }>
             <Outlet />
           </div>
         </main>

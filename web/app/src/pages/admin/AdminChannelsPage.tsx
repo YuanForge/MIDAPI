@@ -1719,12 +1719,12 @@ function ChannelHealthBadge({ channelId }: { channelId: number }) {
         </Badge>
       </button>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="w-[min(calc(100vw-2rem),800px)] max-w-none sm:max-w-[800px]">
           <DialogHeader>
             <DialogTitle>渠道 #{channelId} 健康状态（近 24h）</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="grid grid-cols-3 gap-3 text-center">
+            <div className="grid grid-cols-1 gap-3 text-center sm:grid-cols-3">
               <div className="rounded-lg border p-3">
                 <p className="text-xs text-muted-foreground">成功率</p>
                 <p className={`text-lg font-semibold ${isHealthy ? 'text-emerald-600' : 'text-destructive'}`}>
@@ -1750,8 +1750,8 @@ function ChannelHealthBadge({ channelId }: { channelId: number }) {
                 <p className="mb-2 text-sm font-medium">失败原因 TOP{data.top_errors.length}</p>
                 <div className="space-y-1.5">
                   {data.top_errors.map((e, i) => (
-                    <div key={i} className="flex items-start justify-between gap-2 rounded-md bg-muted/40 px-3 py-2 text-xs">
-                      <span className="flex-1 truncate font-mono text-destructive/80" title={e.msg}>{e.msg || '(空)'}</span>
+                    <div key={i} className="flex items-start justify-between gap-3 rounded-md bg-muted/40 px-3 py-2 text-xs">
+                      <span className="min-w-0 flex-1 truncate font-mono text-destructive/80" title={e.msg}>{e.msg || '(空)'}</span>
                       <span className="shrink-0 font-semibold text-muted-foreground">{e.count} 次</span>
                     </div>
                   ))}
