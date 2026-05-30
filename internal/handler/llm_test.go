@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"strings"
 	"testing"
 
 	"fanapi/internal/protocol"
@@ -71,5 +72,62 @@ func TestShouldConvertRequestBodyResponsesNativeAssistantOutputTextPreserved(t *
 	rtItem, _ := rtInput[0].(map[string]interface{})
 	if _, isString := rtItem["content"].(string); !isString {
 		t.Fatalf("expected current round-trip to alter assistant content shape for regression context, got %#v", rtItem["content"])
+	}
+}
+
+func TestResolveLLMTargetURLResponsesCompact(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "responses endpoint",
+			in:   "https://api.openai.com/v1/responses",
+			want: "https://api.openai.com/v1/responses/compact",
+		},
+		{
+			name: "responses endpoint with query",
+			in:   "https://api.example.com/v1/responses?api-version=2026-05-01",
+			want: "https://api.example.com/v1/responses/compact?api-version=2026-05-01",
+		},
+		{
+			name: "already compact",
+			in:   "https://api.example.com/v1/responses/compact",
+			want: "https://api.example.com/v1/responses/compact",
+		},
+		{
+			name: "base v1 endpoint",
+			in:   "https://api.example.com/v1",
+			want: "https://api.example.com/v1/responses/compact",
+		},
+		{
+			name: "chat completions endpoint",
+			in:   "https://api.example.com/v1/chat/completions",
+			want: "https://api.example.com/v1/responses/compact",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolveLLMTargetURL(tc.in, "gpt-test", false, responsesOperationCompact)
+			if got != tc.want {
+				t.Fatalf("expected %q, got %q", tc.want, got)
+			}
+		})
+	}
+}
+
+func TestResolveLLMTargetURLResponsesCompactWithModelPlaceholder(t *testing.T) {
+	got := resolveLLMTargetURL("https://api.example.com/v1/models/{model}/responses", "gpt-test", false, responsesOperationCompact)
+	if got != "https://api.example.com/v1/models/gpt-test/responses/compact" {
+		t.Fatalf("unexpected target URL: %q", got)
+	}
+}
+
+func TestResolveLLMTargetURLGeminiStreamUnchanged(t *testing.T) {
+	got := resolveLLMTargetURL("https://generativelanguage.googleapis.com/v1beta/models/{model}:{stream_action}", "gemini-test", true, "")
+	if !strings.Contains(got, "/gemini-test:streamGenerateContent") || !strings.HasSuffix(got, "?alt=sse") {
+		t.Fatalf("unexpected Gemini stream URL: %q", got)
 	}
 }

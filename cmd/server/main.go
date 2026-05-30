@@ -347,12 +347,13 @@ func main() {
 		v1 := authed.Group("/v1")
 		v1.Use(middleware.APIKeyOnly())
 		{
-			v1.GET("/models", handler.OpenAIModels)        // OpenAI 兼容模型列表
-			v1.POST("/chat/completions", handler.LLMProxy) // OpenAI 兼容格式
-			v1.POST("/messages", handler.ClaudeProxy)      // Claude 原生格式
-			v1.POST("/responses", handler.ResponsesProxy)  // OpenAI Responses API（SSE / 同步）
-			v1.GET("/responses", handler.ResponsesWSProxy) // OpenAI Responses API（WebSocket 双向流）
-			v1.POST("/gemini", handler.GeminiProxy)        // Gemini 原生格式
+			v1.GET("/models", handler.OpenAIModels)                      // OpenAI 兼容模型列表
+			v1.POST("/chat/completions", handler.LLMProxy)               // OpenAI 兼容格式
+			v1.POST("/messages", handler.ClaudeProxy)                    // Claude 原生格式
+			v1.POST("/responses", handler.ResponsesProxy)                // OpenAI Responses API（SSE / 同步）
+			v1.POST("/responses/compact", handler.ResponsesCompactProxy) // Codex 对话压缩兼容
+			v1.GET("/responses", handler.ResponsesWSProxy)               // OpenAI Responses API（WebSocket 双向流）
+			v1.POST("/gemini", handler.GeminiProxy)                      // Gemini 原生格式
 			v1.POST("/image", handler.CreateImageTask)
 			v1.POST("/video", handler.CreateVideoTask)
 			v1.POST("/audio", handler.CreateAudioTask)

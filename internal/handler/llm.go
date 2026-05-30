@@ -32,6 +32,8 @@ const (
 	protocolClaude    = "claude"
 	protocolGemini    = "gemini"
 	protocolResponses = "responses"
+
+	responsesOperationCompact = "compact"
 )
 
 // OpenAIModels returns an OpenAI-compatible model list for clients that discover
@@ -466,6 +468,14 @@ func ResponsesProxy(c *gin.Context) {
 	llmProxy(c)
 }
 
+// ResponsesCompactProxy 处理 POST /v1/responses/compact。
+// Codex 在执行对话压缩时会请求该兼容端点；请求体仍按 Responses API 代理链路处理。
+func ResponsesCompactProxy(c *gin.Context) {
+	c.Set("client_proto", protocolResponses)
+	c.Set("responses_operation", responsesOperationCompact)
+	llmProxy(c)
+}
+
 // llmProxy 是三条 LLM 路由的共同实现。
 // 支持：
 //   - 多渠道负载均衡（加权随机 + 优先级 + 错误率自动屏蔽）
@@ -493,6 +503,8 @@ func llmProxy(c *gin.Context) {
 	isStable := keyType == "stable"
 
 	channelIDStr := c.Query("channel_id")
+	responsesOperation := getResponsesOperation(c)
+	isResponsesCompact := responsesOperation == responsesOperationCompact
 
 	// 余额前置检查：通用余额 <= 0 时直接拒绝，无论模型定价是否为 0
 	if bal, balErr := billing.GetBalance(c.Request.Context(), userID); balErr == nil && bal <= 0 {
@@ -530,6 +542,10 @@ func llmProxy(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 			return
 		}
+		if isResponsesCompact && effectiveProtocol(ch) != protocolResponses {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "对话压缩需要选择 protocol=responses 的渠道"})
+			return
+		}
 	} else {
 		routingModel, _ := reqData["model"].(string)
 		if routingModel == "" {
@@ -538,7 +554,11 @@ func llmProxy(c *gin.Context) {
 		}
 		if isStable {
 			// 稳定密钥：获取按价格升序排列的渠道列表
-			stableChannels, err = service.SelectChannelStableForUser(c.Request.Context(), routingModel, userGroup)
+			if isResponsesCompact {
+				stableChannels, err = service.SelectChannelStableForUserByProtocol(c.Request.Context(), routingModel, protocolResponses, userGroup)
+			} else {
+				stableChannels, err = service.SelectChannelStableForUser(c.Request.Context(), routingModel, userGroup)
+			}
 			if err != nil {
 				// 兜底：按 name 精确查找（兼容旧行为）
 				ch, err = service.GetChannelByName(c.Request.Context(), routingModel)
@@ -546,16 +566,28 @@ func llmProxy(c *gin.Context) {
 					c.JSON(http.StatusNotFound, gin.H{"error": "渠道不存在: " + routingModel})
 					return
 				}
+				if isResponsesCompact && effectiveProtocol(ch) != protocolResponses {
+					c.JSON(http.StatusNotFound, gin.H{"error": "对话压缩需要可用的 protocol=responses 渠道: " + routingModel})
+					return
+				}
 			} else {
 				ch = &stableChannels[0]
 			}
 		} else {
-			ch, err = service.SelectChannel(c.Request.Context(), routingModel)
+			if isResponsesCompact {
+				ch, err = service.SelectChannelByProtocol(c.Request.Context(), routingModel, protocolResponses)
+			} else {
+				ch, err = service.SelectChannel(c.Request.Context(), routingModel)
+			}
 			if err != nil {
 				// 兜底：按 name 精确查找（兼容旧行为）
 				ch, err = service.GetChannelByName(c.Request.Context(), routingModel)
 				if err != nil {
 					c.JSON(http.StatusNotFound, gin.H{"error": "渠道不存在: " + routingModel})
+					return
+				}
+				if isResponsesCompact && effectiveProtocol(ch) != protocolResponses {
+					c.JSON(http.StatusNotFound, gin.H{"error": "对话压缩需要可用的 protocol=responses 渠道: " + routingModel})
 					return
 				}
 			}
@@ -563,6 +595,15 @@ func llmProxy(c *gin.Context) {
 	}
 
 	llmProxyWithChannel(c, ch, reqData, userID, apiKeyIDVal, userGroup, triedIDs, stableChannels)
+}
+
+func getResponsesOperation(c *gin.Context) string {
+	raw, ok := c.Get("responses_operation")
+	if !ok {
+		return ""
+	}
+	op, _ := raw.(string)
+	return op
 }
 
 func shouldConvertRequestBody(clientProto, channelProto string, reqData map[string]interface{}) bool {
@@ -598,6 +639,12 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 	resolvedModel, _ := reqData["model"].(string)
 
 	proto := effectiveProtocol(ch)
+	responsesOperation := getResponsesOperation(c)
+	isResponsesCompact := responsesOperation == responsesOperationCompact
+	if isResponsesCompact && proto != protocolResponses {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "对话压缩需要 protocol=responses 的上游渠道"})
+		return
+	}
 
 	// 获取客户端协议（由 LLMProxy/ClaudeProxy/GeminiProxy 写入 context）
 	clientProto := protocolOpenAI
@@ -625,7 +672,7 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 	//   必须经 responsesToOpenAI → openAIToResponsesRequest 将 messages 转换为合法的 input 字段，
 	//   否则原始 messages 体直接发往上游 Responses API 会导致 422/502。
 	// passthrough_body=true 时跳过所有转换，直接使用原始请求体字节。
-	needsConversion := shouldConvertRequestBody(clientProto, proto, reqData)
+	needsConversion := !isResponsesCompact && shouldConvertRequestBody(clientProto, proto, reqData)
 	if !ch.PassthroughBody && needsConversion && ch.RequestScript == "" {
 		working := reqData
 		// Step 1: 客户端格式 → OpenAI
@@ -768,14 +815,7 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 	// 5. 写入 LLM 请求日志
 	modelName := resolvedModel
 	// 预先计算实际上游 URL（与 sendLLMRequest 中逻辑保持一致）
-	upstreamURL := strings.ReplaceAll(ch.BaseURL, "{model}", modelName)
-	if strings.Contains(upstreamURL, "{stream_action}") {
-		if isStream {
-			upstreamURL = strings.ReplaceAll(upstreamURL, "{stream_action}", "streamGenerateContent")
-		} else {
-			upstreamURL = strings.ReplaceAll(upstreamURL, "{stream_action}", "generateContent")
-		}
-	}
+	upstreamURL := resolveLLMTargetURL(ch.BaseURL, modelName, isStream, responsesOperation)
 	upstreamMethod := ch.Method
 	if upstreamMethod == "" {
 		upstreamMethod = "POST"
@@ -803,7 +843,7 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 
 	// 6. 号池 Key 已在步骤1分配，直接发送上游请求
 	// 7. 发送上游请求
-	sentHeaders, resp, err := sendLLMRequest(c, ch, mappedReq, poolKey, proto, resolvedModel, isStream)
+	sentHeaders, resp, err := sendLLMRequest(c, ch, mappedReq, poolKey, proto, resolvedModel, isStream, responsesOperation)
 	if sentHeaders != nil {
 		// 异步写入请求头（不阻塞主流程）
 		logID := llmLog.ID
@@ -845,7 +885,7 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 		if rotErr == nil {
 			poolKey = newKey
 			poolKeyIDVal = newKey.ID // 更新 poolKeyIDVal，确保后续结算流水关联正确的号商
-			_, resp, err = sendLLMRequest(c, ch, mappedReq, poolKey, proto, resolvedModel, isStream)
+			_, resp, err = sendLLMRequest(c, ch, mappedReq, poolKey, proto, resolvedModel, isStream, responsesOperation)
 			if err != nil {
 				service.RecordChannelError(c.Request.Context(), channelID)
 				llmRefundAndAbort(c, corrID, userID, totalHold, upstreamCostHold, poolKeyIDVal, 0, "上游请求失败(重试): "+err.Error())
@@ -919,13 +959,15 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 	// ---- 同步响应 ----
 	if !isStream {
 		respBytes, _ := io.ReadAll(resp.Body)
-		if converted, detected, convErr := protocol.ConvertSSEToSyncResponse(respBytes, proto); detected {
-			if convErr != nil {
-				service.RecordChannelError(c.Request.Context(), channelID)
-				llmRefundAndAbort(c, corrID, userID, totalHold, upstreamCostHold, poolKeyIDVal, http.StatusOK, "上游响应格式错误: "+convErr.Error())
-				return
+		if !isResponsesCompact {
+			if converted, detected, convErr := protocol.ConvertSSEToSyncResponse(respBytes, proto); detected {
+				if convErr != nil {
+					service.RecordChannelError(c.Request.Context(), channelID)
+					llmRefundAndAbort(c, corrID, userID, totalHold, upstreamCostHold, poolKeyIDVal, http.StatusOK, "上游响应格式错误: "+convErr.Error())
+					return
+				}
+				respBytes = converted
 			}
-			respBytes = converted
 		}
 
 		// 先解析原始上游响应（格式与 proto 一致），用于 usage 提取、error_script 检测和日志记录。
@@ -1414,7 +1456,7 @@ func buildStreamClientResponse(lines []string, proto string) model.JSON {
 //   - "query_param" 将 KEY 作为查询参数附加到 URL
 //   - "basic"      HTTP Basic Auth，KEY 格式为 "user:pass"
 //   - "sigv4"      AWS Signature V4，KEY 格式为 "ACCESS_KEY:SECRET_KEY"
-func sendLLMRequest(c *gin.Context, ch *model.Channel, reqData map[string]interface{}, poolKey *model.PoolKey, _ string, resolvedModel string, isStream bool) (map[string]string, *http.Response, error) {
+func sendLLMRequest(c *gin.Context, ch *model.Channel, reqData map[string]interface{}, poolKey *model.PoolKey, _ string, resolvedModel string, isStream bool, responsesOperation ...string) (map[string]string, *http.Response, error) {
 	// passthrough_body=true：直接使用客户端原始请求体，不做任何序列化/修改
 	var body []byte
 	if ch.PassthroughBody {
@@ -1430,27 +1472,11 @@ func sendLLMRequest(c *gin.Context, ch *model.Channel, reqData map[string]interf
 	timeout := time.Duration(ch.TimeoutMs) * time.Millisecond
 	httpClient := &http.Client{Timeout: timeout}
 
-	// 支持 {model} 占位符，将渠道配置的模型名注入 URL
-	// 例如：https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent
-	// 支持 {stream_action} 占位符，根据请求是否流式选择 Gemini 端点：
-	//   流式  → streamGenerateContent?alt=sse
-	//   非流式 → generateContent
-	targetURL := ch.BaseURL
-	if resolvedModel != "" {
-		targetURL = strings.ReplaceAll(targetURL, "{model}", resolvedModel)
+	op := ""
+	if len(responsesOperation) > 0 {
+		op = responsesOperation[0]
 	}
-	if strings.Contains(targetURL, "{stream_action}") {
-		if isStream {
-			targetURL = strings.ReplaceAll(targetURL, "{stream_action}", "streamGenerateContent")
-			if strings.Contains(targetURL, "?") {
-				targetURL += "&alt=sse"
-			} else {
-				targetURL += "?alt=sse"
-			}
-		} else {
-			targetURL = strings.ReplaceAll(targetURL, "{stream_action}", "generateContent")
-		}
-	}
+	targetURL := resolveLLMTargetURL(ch.BaseURL, resolvedModel, isStream, op)
 
 	method := ch.Method
 	if method == "" {
@@ -1516,6 +1542,58 @@ func sendLLMRequest(c *gin.Context, ch *model.Channel, reqData map[string]interf
 
 	resp, err := httpClient.Do(upReq)
 	return sanitizedHeaders, resp, err
+}
+
+func resolveLLMTargetURL(baseURL, resolvedModel string, isStream bool, responsesOperation string) string {
+	targetURL := baseURL
+	if resolvedModel != "" {
+		targetURL = strings.ReplaceAll(targetURL, "{model}", resolvedModel)
+	}
+	if strings.Contains(targetURL, "{stream_action}") {
+		if isStream {
+			targetURL = strings.ReplaceAll(targetURL, "{stream_action}", "streamGenerateContent")
+			if strings.Contains(targetURL, "?") {
+				targetURL += "&alt=sse"
+			} else {
+				targetURL += "?alt=sse"
+			}
+		} else {
+			targetURL = strings.ReplaceAll(targetURL, "{stream_action}", "generateContent")
+		}
+	}
+	if responsesOperation == responsesOperationCompact {
+		targetURL = resolveResponsesCompactURL(targetURL)
+	}
+	return targetURL
+}
+
+func resolveResponsesCompactURL(targetURL string) string {
+	parsed, err := url.Parse(targetURL)
+	if err != nil {
+		base, query, hasQuery := strings.Cut(targetURL, "?")
+		base = strings.TrimRight(base, "/") + "/compact"
+		if hasQuery {
+			return base + "?" + query
+		}
+		return base
+	}
+
+	path := strings.TrimRight(parsed.Path, "/")
+	switch {
+	case strings.HasSuffix(path, "/responses/compact"):
+		parsed.Path = path
+	case strings.HasSuffix(path, "/responses"):
+		parsed.Path = path + "/compact"
+	case strings.HasSuffix(path, "/chat/completions"):
+		parsed.Path = strings.TrimSuffix(path, "/chat/completions") + "/responses/compact"
+	case strings.HasSuffix(path, "/v1"):
+		parsed.Path = path + "/responses/compact"
+	case path == "":
+		parsed.Path = "/responses/compact"
+	default:
+		parsed.Path = path + "/responses/compact"
+	}
+	return parsed.String()
 }
 
 // applyChannelAuth applies key-pool credentials according to the channel auth type.

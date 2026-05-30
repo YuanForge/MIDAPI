@@ -217,6 +217,38 @@ func SelectChannelStableForUser(ctx context.Context, modelName, userGroup string
 	return candidates, nil
 }
 
+// SelectChannelStableForUserByProtocol 返回指定协议的可用渠道，并按当前用户可见售价升序排列。
+func SelectChannelStableForUserByProtocol(ctx context.Context, modelName, protocol, userGroup string, excludeIDs ...int64) ([]model.Channel, error) {
+	channels, err := listChannelsByModel(ctx, modelName)
+	if err != nil {
+		return nil, err
+	}
+	channels = filterChannelsByProtocol(channels, protocol)
+	if len(channels) == 0 {
+		return nil, fmt.Errorf("无可用 %s 协议渠道: %s", protocol, modelName)
+	}
+
+	excluded := make(map[int64]bool, len(excludeIDs))
+	for _, id := range excludeIDs {
+		excluded[id] = true
+	}
+
+	var candidates []model.Channel
+	for _, ch := range channels {
+		if !excluded[ch.ID] && ch.IsActive {
+			candidates = append(candidates, ch)
+		}
+	}
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("所有 %s 协议渠道均已尝试或不可用", protocol)
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		return stableChannelLess(candidates[i], candidates[j], userGroup)
+	})
+	return candidates, nil
+}
+
 func stableChannelLess(left, right model.Channel, userGroup string) bool {
 	leftPrice := channelBasePriceForGroup(left, userGroup)
 	rightPrice := channelBasePriceForGroup(right, userGroup)
@@ -380,6 +412,58 @@ func SelectChannel(ctx context.Context, modelName string, excludeIDs ...int64) (
 	return selected, nil
 }
 
+// SelectChannelByProtocol 使用与 SelectChannel 相同的策略，但只在指定协议渠道中选择。
+func SelectChannelByProtocol(ctx context.Context, modelName, protocol string, excludeIDs ...int64) (*model.Channel, error) {
+	channels, err := listChannelsByModel(ctx, modelName)
+	if err != nil {
+		return nil, err
+	}
+	channels = filterChannelsByProtocol(channels, protocol)
+	if len(channels) == 0 {
+		return nil, fmt.Errorf("无可用 %s 协议渠道: %s", protocol, modelName)
+	}
+
+	excluded := make(map[int64]bool, len(excludeIDs))
+	for _, id := range excludeIDs {
+		excluded[id] = true
+	}
+
+	var candidates []model.Channel
+	for _, ch := range channels {
+		if excluded[ch.ID] {
+			continue
+		}
+		if isChannelUnhealthy(ctx, ch.ID) {
+			continue
+		}
+		candidates = append(candidates, ch)
+	}
+
+	if len(candidates) == 0 {
+		for _, ch := range channels {
+			if !excluded[ch.ID] {
+				candidates = append(candidates, ch)
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("所有 %s 协议渠道均不可用，请稍后重试", protocol)
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].Priority > candidates[j].Priority
+	})
+	topPriority := candidates[0].Priority
+	var topTier []model.Channel
+	for _, ch := range candidates {
+		if ch.Priority == topPriority {
+			topTier = append(topTier, ch)
+		}
+	}
+
+	return weightedRandom(topTier), nil
+}
+
 // SelectChannelByWeight 用于重试场景：跳过优先级分组，直接对所有未排除的健康渠道
 // 做加权随机选取。当健康渠道全部排除后回退到全部未排除渠道，保证重试不会空手而归。
 func SelectChannelByWeight(ctx context.Context, modelName string, excludeIDs ...int64) (*model.Channel, error) {
@@ -457,6 +541,23 @@ func listChannelsByModel(ctx context.Context, modelName string) ([]model.Channel
 		cache.Client.Set(ctx, cacheKey, b, channelModelListTTL)
 	}
 	return channels, nil
+}
+
+func filterChannelsByProtocol(channels []model.Channel, protocol string) []model.Channel {
+	if protocol == "" {
+		return channels
+	}
+	filtered := make([]model.Channel, 0, len(channels))
+	for _, ch := range channels {
+		chProto := ch.Protocol
+		if chProto == "" {
+			chProto = "openai"
+		}
+		if chProto == protocol {
+			filtered = append(filtered, ch)
+		}
+	}
+	return filtered
 }
 
 func weightedRandom(channels []model.Channel) *model.Channel {
