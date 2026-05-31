@@ -169,7 +169,11 @@ export function ConsoleLayout({
   const isLoggedIn = !!getRoleToken(role)
   const displayName = identity?.label
   const isFullBleedPage = role === 'user' && location.pathname === '/docs'
-  const isWidePage = role === 'admin' && location.pathname === '/admin/llm-logs'
+  const isWidePage = role === 'admin' && [
+    '/admin/channels',
+    '/admin/key-pools',
+    '/admin/llm-logs',
+  ].includes(location.pathname)
 
   // Build nav groups from either `groups` or flat `items`, filter auth-gated when not logged in
   const rawGroups: NavGroup[] = groups ?? (subtitle ? [{ label: subtitle, items }] : [{ items }])

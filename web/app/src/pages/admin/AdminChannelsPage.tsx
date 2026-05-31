@@ -936,8 +936,7 @@ export function AdminChannelsPage() {
       ) : null}
 
       <Card className="overflow-hidden">
-        <div className="overflow-x-auto">
-        <Table>
+        <Table className="min-w-[1500px]">
           <TableHeader>
             <TableRow>
               <TableHead className="w-10">
@@ -1031,11 +1030,10 @@ export function AdminChannelsPage() {
             </TableBody>
           )}
         </Table>
-        </div>
       </Card>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-[1224px]">
+        <DialogContent className="w-[min(calc(100vw-2rem),1280px)] max-w-none sm:max-w-[1280px]">
           <DialogHeader>
             <DialogTitle>{form.id ? '编辑渠道' : '新增渠道'}</DialogTitle>
             <DialogDescription>覆盖上游接入所需的核心字段。</DialogDescription>
@@ -1666,7 +1664,7 @@ export function AdminChannelsPage() {
 
       {/* 批量设权重 Dialog */}
       <Dialog open={batchRateOpen} onOpenChange={setBatchRateOpen}>
-        <DialogContent>
+        <DialogContent className="w-[min(calc(100vw-2rem),560px)] max-w-none sm:max-w-[560px]">
           <DialogHeader>
             <DialogTitle>批量设置权重</DialogTitle>
             <DialogDescription>将选中 {selectedIds.size} 个渠道的权重设为同一值。</DialogDescription>
@@ -1681,7 +1679,7 @@ export function AdminChannelsPage() {
 
       {/* 变更日志 Dialog */}
       <Dialog open={logChannel !== null} onOpenChange={() => setLogChannel(null)}>
-        <DialogContent className="sm:max-w-2xl">
+        <DialogContent className="w-[min(calc(100vw-2rem),960px)] max-w-none sm:max-w-[960px]">
           <DialogHeader>
             <DialogTitle>渠道变更日志</DialogTitle>
             <DialogDescription>{logChannel?.name ?? logChannel?.model ?? `#${logChannel?.id}`}</DialogDescription>

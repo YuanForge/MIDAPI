@@ -269,8 +269,8 @@ export function AdminKeyPoolsPage() {
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       ) : null}
-      <Card>
-        <Table>
+      <Card className="overflow-hidden">
+        <Table className="min-w-[1000px]">
           <TableHeader>
             <TableRow>
               <TableHead>ID</TableHead>
@@ -327,7 +327,7 @@ export function AdminKeyPoolsPage() {
       </Card>
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent>
+        <DialogContent className="w-[min(calc(100vw-2rem),720px)] max-w-none sm:max-w-[720px]">
           <DialogHeader><DialogTitle>新建号池</DialogTitle></DialogHeader>
           <div className="flex flex-col gap-4">
             <NativeSelect value={channelId} onChange={(event) => setChannelId(event.target.value)}>
@@ -348,9 +348,9 @@ export function AdminKeyPoolsPage() {
       </Dialog>
 
       <Dialog open={keyOpen} onOpenChange={setKeyOpen}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent className="max-h-[86vh] w-[min(calc(100vw-2rem),1160px)] max-w-none overflow-y-auto sm:max-w-[1160px]">
           <DialogHeader><DialogTitle>{activePool?.name ?? ''} - Key 管理</DialogTitle></DialogHeader>
-          <div className="flex gap-3">
+          <div className="flex flex-wrap gap-3">
             <Input value={keyValue} onChange={(event) => setKeyValue(event.target.value)} placeholder="Key 值" />
             <Input value={priority} onChange={(event) => setPriority(event.target.value)} placeholder="优先级" />
             <Button onClick={addKey}>添加 Key</Button>
@@ -378,7 +378,7 @@ export function AdminKeyPoolsPage() {
               </div>
             </div>
           ) : null}
-          <Table>
+          <Table className="min-w-[1080px]">
             <TableHeader>
               <TableRow>
                 <TableHead>ID</TableHead>
@@ -483,14 +483,14 @@ export function AdminKeyPoolsPage() {
       </AlertDialog>
 
       <Dialog open={bindingOpen} onOpenChange={setBindingOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="w-[min(calc(100vw-2rem),900px)] max-w-none sm:max-w-[900px]">
           <DialogHeader><DialogTitle>{bindingPool?.name ?? ''} - 绑定渠道</DialogTitle></DialogHeader>
           {bindingLoading ? (
             <p className="py-4 text-center text-sm text-muted-foreground">加载中…</p>
           ) : boundChannels.length === 0 ? (
             <p className="py-4 text-center text-sm text-muted-foreground">暂无渠道使用此号池</p>
           ) : (
-            <Table>
+            <Table className="min-w-[760px]">
               <TableHeader>
                 <TableRow>
                   <TableHead>ID</TableHead>
