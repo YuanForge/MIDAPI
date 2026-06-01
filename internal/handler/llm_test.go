@@ -131,3 +131,62 @@ func TestResolveLLMTargetURLGeminiStreamUnchanged(t *testing.T) {
 		t.Fatalf("unexpected Gemini stream URL: %q", got)
 	}
 }
+
+func TestResponsesPassthroughSSEFilterDropsEmptyChatCompletionChunk(t *testing.T) {
+	filter := &responsesPassthroughSSEFilter{}
+	input := []string{
+		"event: ",
+		`data: {"id":"chatcmpl-dummy","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":""}}]}`,
+		"",
+		"event: response.created",
+		`data: {"type":"response.created","response":{"id":"resp_1","status":"in_progress"}}`,
+		"",
+	}
+
+	var got []string
+	for _, line := range input {
+		got = append(got, filter.Convert(line)...)
+	}
+	got = append(got, filter.Flush()...)
+
+	want := []string{
+		"event: response.created",
+		`data: {"type":"response.created","response":{"id":"resp_1","status":"in_progress"}}`,
+		"",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("unexpected filtered SSE:\nwant %q\ngot  %q", strings.Join(want, "\n"), strings.Join(got, "\n"))
+	}
+}
+
+func TestResponsesPassthroughSSEFilterKeepsNonEmptyChatCompletionChunk(t *testing.T) {
+	filter := &responsesPassthroughSSEFilter{}
+	input := []string{
+		`data: {"id":"chatcmpl-real","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"hello"}}]}`,
+		"",
+	}
+
+	var got []string
+	for _, line := range input {
+		got = append(got, filter.Convert(line)...)
+	}
+
+	if strings.Join(got, "\n") != strings.Join(input, "\n") {
+		t.Fatalf("expected non-empty chat chunk to pass through, got %q", strings.Join(got, "\n"))
+	}
+}
+
+func TestResponsesPassthroughSSEFilterFlushesTrailingResponsesBlock(t *testing.T) {
+	filter := &responsesPassthroughSSEFilter{}
+	_ = filter.Convert("event: response.completed")
+	_ = filter.Convert(`data: {"type":"response.completed","response":{"id":"resp_1","status":"completed"}}`)
+
+	got := filter.Flush()
+	want := []string{
+		"event: response.completed",
+		`data: {"type":"response.completed","response":{"id":"resp_1","status":"completed"}}`,
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("expected trailing responses block to flush, got %q", strings.Join(got, "\n"))
+	}
+}
