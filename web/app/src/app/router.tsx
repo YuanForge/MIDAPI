@@ -2,7 +2,7 @@ import { lazy, Suspense } from 'react'
 import type { ReactNode } from 'react'
 import { createBrowserRouter, Navigate, Outlet } from 'react-router-dom'
 
-import { getRoleToken, getSiteModePreference } from '@/lib/auth/storage'
+import { getRoleToken } from '@/lib/auth/storage'
 
 const AuthLayout = lazy(() => import('@/layouts/AuthLayout').then((m) => ({ default: m.AuthLayout })))
 const UserLayout = lazy(() => import('@/layouts/UserLayout').then((m) => ({ default: m.UserLayout })))
@@ -14,6 +14,7 @@ const RegisterPage = lazy(() => import('@/pages/public/RegisterPage').then((m) =
 const ForgotPasswordPage = lazy(() => import('@/pages/public/ForgotPasswordPage').then((m) => ({ default: m.ForgotPasswordPage })))
 const AppErrorPage = lazy(() => import('@/pages/public/AppErrorPage').then((m) => ({ default: m.AppErrorPage })))
 const NotFoundPage = lazy(() => import('@/pages/public/NotFoundPage').then((m) => ({ default: m.NotFoundPage })))
+const PublicHomePage = lazy(() => import('@/pages/public/PublicHomePage').then((m) => ({ default: m.PublicHomePage })))
 
 const UserDashboardPage = lazy(() => import('@/pages/user/UserDashboardPage').then((m) => ({ default: m.UserDashboardPage })))
 const UserModelsPage = lazy(() => import('@/pages/user/UserModelsPage').then((m) => ({ default: m.UserModelsPage })))
@@ -97,19 +98,8 @@ function PublicOnly({
   return <Outlet />
 }
 
-function RootRedirect() {
-  const mode = getSiteModePreference()
-  const adminToken = getRoleToken('admin')
-  const vendorToken = getRoleToken('vendor')
-
-  if (mode === 'admin' && adminToken) return <Navigate replace to="/admin/dashboard" />
-  if (mode === 'vendor' && vendorToken) return <Navigate replace to="/vendor/dashboard" />
-  // Always go to /dashboard — public pages are visible without login
-  return <Navigate replace to="/dashboard" />
-}
-
 export const router = createBrowserRouter([
-  { path: '/', element: <RootRedirect />, errorElement: renderLazy(<AppErrorPage />) },
+  { path: '/', element: renderLazy(<PublicHomePage />), errorElement: renderLazy(<AppErrorPage />) },
   {
     element: <PublicOnly role="user" redirectTo="/dashboard" />,
     errorElement: renderLazy(<AppErrorPage />),
