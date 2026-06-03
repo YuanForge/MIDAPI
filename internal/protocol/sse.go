@@ -9,6 +9,28 @@ type SSEConverter interface {
 	Flush() []string
 }
 
+type chainedSSEConverter struct {
+	first  SSEConverter
+	second SSEConverter
+}
+
+func (c *chainedSSEConverter) Convert(line string) []string {
+	var out []string
+	for _, mid := range c.first.Convert(line) {
+		out = append(out, c.second.Convert(mid)...)
+	}
+	return out
+}
+
+func (c *chainedSSEConverter) Flush() []string {
+	var out []string
+	for _, mid := range c.first.Flush() {
+		out = append(out, c.second.Convert(mid)...)
+	}
+	out = append(out, c.second.Flush()...)
+	return out
+}
+
 // NewSSEConverter returns an SSEConverter for the given (sourceProto -> clientProto) pair.
 // Returns nil when no conversion is needed (same format, or unsupported pair).
 func NewSSEConverter(sourceProto, clientProto string) SSEConverter {
@@ -26,6 +48,11 @@ func NewSSEConverter(sourceProto, clientProto string) SSEConverter {
 		return &openAIToClaudeSSE{}
 	case sourceProto == ProtocolOpenAI && clientProto == ProtocolResponses:
 		return &openAIToResponsesSSE{}
+	case sourceProto == ProtocolResponses && clientProto == ProtocolClaude:
+		return &chainedSSEConverter{
+			first:  &responsesToOpenAISSE{},
+			second: &openAIToClaudeSSE{},
+		}
 	default:
 		// Unsupported pair: pass lines through unchanged so the client at least gets something.
 		return nil

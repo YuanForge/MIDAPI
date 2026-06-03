@@ -25,6 +25,7 @@ import { cn } from '@/lib/utils'
 type DocMode = 'channel' | 'balance' | 'task'
 type LangTab = 'curl' | 'python' | 'php' | 'go' | 'java'
 type SunoMode = 'inspire' | 'custom' | 'extend' | 'overpainting' | 'underpainting'
+type ProviderOption = { name: string; iconUrl?: string }
 
 const typeOptions = [
   { labelKey: 'models.allTypes', value: '' },
@@ -248,6 +249,36 @@ function getChannelResponse(channel: UserChannel, language: string) {
   return JSON.stringify({ task_id: 'task_abc1234xyz', status: 'pending' }, null, 2)
 }
 
+function ProviderLogo({ iconUrl, label }: { iconUrl?: string; label: string }) {
+  return (
+    <span className="flex size-4 shrink-0 items-center justify-center overflow-hidden rounded-full border bg-background text-[9px] font-semibold text-foreground">
+      {iconUrl ? (
+        <img alt="" src={iconUrl} className="h-full w-full object-cover" />
+      ) : (
+        label.charAt(0).toUpperCase()
+      )}
+    </span>
+  )
+}
+
+function ProviderLogoStack({ providers }: { providers: ProviderOption[] }) {
+  const icons = providers.filter((provider) => provider.iconUrl).slice(0, 3)
+  if (icons.length === 0) return null
+
+  return (
+    <span className="flex shrink-0 -space-x-1">
+      {icons.map((provider) => (
+        <span
+          key={provider.name}
+          className="flex size-4 items-center justify-center overflow-hidden rounded-full border bg-background ring-1 ring-background"
+        >
+          <img alt="" src={provider.iconUrl} className="h-full w-full object-cover" />
+        </span>
+      ))}
+    </span>
+  )
+}
+
 export function UserModelsPage() {
   const { i18n, t } = useTranslation()
   const { data: channels, loading, error, reload } = useAsync(async () => {
@@ -270,10 +301,22 @@ export function UserModelsPage() {
     [channels],
   )
 
-  const providerOptions = useMemo(
-    () => Array.from(new Set(channels.map((channel) => channel.model_provider?.trim()).filter(Boolean) as string[])).sort(),
-    [channels],
-  )
+  const providerOptions = useMemo(() => {
+    const providers = new Map<string, string>()
+    channels.forEach((channel) => {
+      const provider = channel.model_provider?.trim()
+      if (!provider) return
+
+      const iconUrl = channel.icon_url?.trim() || ''
+      if (!providers.has(provider) || (!providers.get(provider) && iconUrl)) {
+        providers.set(provider, iconUrl)
+      }
+    })
+
+    return Array.from(providers, ([name, iconUrl]) => ({ name, iconUrl })).sort((left, right) =>
+      left.name.localeCompare(right.name),
+    )
+  }, [channels])
 
   const availableTypeOptions = useMemo(() => {
     const presentTypes = new Set(channels.map((c) => c.type ?? ''))
@@ -284,7 +327,7 @@ export function UserModelsPage() {
     return channels.filter((channel) => {
       if (filterType && channel.type !== filterType) return false
       if (filterProtocol && (channel.protocol || 'openai') !== filterProtocol) return false
-      if (filterProvider && channel.model_provider !== filterProvider) return false
+      if (filterProvider && channel.model_provider?.trim() !== filterProvider) return false
       if (!filterName) return true
 
       const keyword = filterName.toLowerCase()
@@ -388,19 +431,21 @@ export function UserModelsPage() {
           <div className="flex flex-wrap items-center gap-2">
             <Badge
               variant={filterProvider === '' ? 'default' : 'secondary'}
-              className="cursor-pointer px-3 py-1"
+              className="cursor-pointer gap-1.5 px-3 py-1"
               onClick={() => setFilterProvider('')}
             >
+              <ProviderLogoStack providers={providerOptions} />
               {t('models.allProviders')}
             </Badge>
             {providerOptions.map((provider) => (
               <Badge
-                key={provider}
-                variant={filterProvider === provider ? 'default' : 'secondary'}
-                className="cursor-pointer px-3 py-1"
-                onClick={() => setFilterProvider(provider)}
+                key={provider.name}
+                variant={filterProvider === provider.name ? 'default' : 'secondary'}
+                className="cursor-pointer gap-1.5 px-3 py-1"
+                onClick={() => setFilterProvider(provider.name)}
               >
-                {provider}
+                <ProviderLogo iconUrl={provider.iconUrl} label={provider.name} />
+                {provider.name}
               </Badge>
             ))}
           </div>
