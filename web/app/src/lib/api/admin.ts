@@ -397,6 +397,25 @@ export type AdminUpstreamChannelBindingPreview = {
   price_unavailable?: number
 }
 
+export type AdminChannelUpstreamCostPreview = {
+  platform?: AdminUpstreamPlatform
+  model?: string
+  upstream_model?: string
+  found?: boolean
+  base_url_match?: boolean
+  price_available?: boolean
+  price_unavailable?: boolean
+  billing_type?: string
+  protocol?: string
+  billing_config?: Record<string, unknown>
+}
+
+export type AdminChannelUpstreamCostResult = AdminChannelUpstreamCostPreview & {
+  updated?: number
+  price_synced?: number
+  channel?: AdminChannel
+}
+
 export type AdminRole = {
   id?: number
   name?: string
@@ -507,6 +526,10 @@ export const adminApi = {
     }),
   deleteChannel: (id: number) =>
     http.delete<Record<string, unknown>>(`/admin/channels/${id}`),
+  previewChannelUpstreamCost: (id: number, params: { platform_id: number; model?: string; group?: string; markup?: number }) =>
+    http.get<AdminChannelUpstreamCostPreview>(`/admin/channels/${id}/upstream-cost`, { params }),
+  syncChannelUpstreamCost: (id: number, payload: { platform_id: number; model?: string; group?: string; markup?: number }) =>
+    http.post<AdminChannelUpstreamCostResult>(`/admin/channels/${id}/sync-upstream-cost`, payload),
   listUsers: (page = 1, size = 20, filters: Record<string, string> = {}) =>
     http.get<{ items?: AdminUser[]; users?: AdminUser[]; total?: number } | AdminUser[]>(
       '/admin/users',

@@ -247,6 +247,8 @@ func main() {
 			admin.POST("/channels/batch", handler.BatchUpdateChannels)
 			admin.GET("/channels/:id/health", handler.GetChannelHealth)
 			admin.GET("/channels/:id/logs", handler.ListChannelLogs)
+			admin.GET("/channels/:id/upstream-cost", handler.PreviewChannelUpstreamCost)
+			admin.POST("/channels/:id/sync-upstream-cost", handler.SyncChannelUpstreamCost)
 
 			// 用户画像 + 风控标签 + API Key 总览
 			admin.GET("/users/:id/portrait", handler.GetUserPortrait)

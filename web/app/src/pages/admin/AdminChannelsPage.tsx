@@ -40,7 +40,14 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
-import { adminApi, type AdminChannel, type AdminChannelLog, type AdminKeyPool } from '@/lib/api/admin'
+import {
+  adminApi,
+  type AdminChannel,
+  type AdminChannelLog,
+  type AdminChannelUpstreamCostPreview,
+  type AdminKeyPool,
+  type AdminUpstreamPlatform,
+} from '@/lib/api/admin'
 import { useAsync } from '@/hooks/use-async'
 
 type ChannelForm = {
@@ -60,6 +67,9 @@ type ChannelForm = {
   headers_text: string
   billing_config_text: string
   pricing_groups: PricingGroupForm[]
+  upstream_platform_id: string
+  upstream_model: string
+  upstream_group: string
   // markup multiplier (selling price = cost * markup)
   billing_markup: string
   // token billing
@@ -152,6 +162,14 @@ const structuredBillingConfigKeys = new Set([
   'cost_per_call',
   'pricing_groups',
 ])
+const upstreamMetaKeys = new Set([
+  'upstream_platform_id',
+  'upstream_platform_name',
+  'upstream_platform_type',
+  'upstream_base_url',
+  'upstream_model',
+  'upstream_group',
+])
 const pricingGroupOverrideKeys = new Set([
   'input_price_per_1m_tokens',
   'output_price_per_1m_tokens',
@@ -195,6 +213,9 @@ const emptyForm: ChannelForm = {
   headers_text: emptyJson,
   billing_config_text: emptyJson,
   pricing_groups: [],
+  upstream_platform_id: '',
+  upstream_model: '',
+  upstream_group: '',
   billing_markup: '1.2',
   billing_input_price: '',
   billing_output_price: '',
@@ -310,9 +331,17 @@ function getTierNum(cfg: Record<string, unknown>, key: 'size_prices' | 'size_cos
   return toCnyInput(value)
 }
 
+function getConfigString(cfg: Record<string, unknown>, key: string): string {
+  const value = cfg[key]
+  if (value === undefined || value === null) {
+    return ''
+  }
+  return String(value)
+}
+
 function buildAdvancedBillingConfigText(cfg: Record<string, unknown>) {
   const rest = Object.fromEntries(
-    Object.entries(cfg).filter(([key]) => !structuredBillingConfigKeys.has(key))
+    Object.entries(cfg).filter(([key]) => !structuredBillingConfigKeys.has(key) && !upstreamMetaKeys.has(key))
   )
   return prettyJson(rest)
 }
@@ -564,6 +593,15 @@ function buildBillingConfig(form: ChannelForm): Record<string, unknown> {
     cfg.pricing_groups = pricingGroups
   }
 
+  const upstreamPlatformID = Number(form.upstream_platform_id || '0')
+  if (upstreamPlatformID > 0) {
+    cfg.upstream_platform_id = upstreamPlatformID
+    cfg.upstream_model = form.upstream_model.trim() || form.model.trim()
+    if (form.upstream_group.trim()) {
+      cfg.upstream_group = form.upstream_group.trim()
+    }
+  }
+
   return cfg
 }
 
@@ -588,6 +626,9 @@ function buildFormFromChannel(row: AdminChannel, isCopy = false): ChannelForm {
     headers_text: prettyJson(row.headers),
     billing_config_text: buildAdvancedBillingConfigText(billingConfig),
     pricing_groups: extractPricingGroups(billingConfig),
+    upstream_platform_id: getConfigString(billingConfig, 'upstream_platform_id'),
+    upstream_model: getConfigString(billingConfig, 'upstream_model') || row.model || row.routing_model || '',
+    upstream_group: getConfigString(billingConfig, 'upstream_group'),
     billing_markup: (() => {
       // Infer markup from input price / input cost ratio; fallback to 1.2
       const price = parseAmount(billingConfig.input_price_per_1m_tokens)
@@ -681,26 +722,32 @@ export function AdminChannelsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
 
   const { data, loading, error: loadError, reload } = useAsync(async () => {
-    const [channelResponse, poolResponse] = await Promise.all([
+    const [channelResponse, poolResponse, upstreamResponse] = await Promise.all([
       adminApi.listChannels({ page, size: channelPageSize, ...queryParams }),
       adminApi.listKeyPools(),
+      adminApi.listUpstreamPlatforms(),
     ])
     const rows = Array.isArray(channelResponse)
       ? channelResponse
       : channelResponse.channels ?? channelResponse.items ?? []
     const total = Array.isArray(channelResponse) ? rows.length : channelResponse.total ?? rows.length
     const pools = Array.isArray(poolResponse) ? poolResponse : poolResponse.pools ?? []
+    const upstreamPlatforms = upstreamResponse.platforms ?? []
     setSelectedIds(new Set())
-    return { rows, pools, total }
-  }, { rows: [] as AdminChannel[], pools: [] as AdminKeyPool[], total: 0 }, [page, queryParams])
+    return { rows, pools, upstreamPlatforms, total }
+  }, { rows: [] as AdminChannel[], pools: [] as AdminKeyPool[], upstreamPlatforms: [] as AdminUpstreamPlatform[], total: 0 }, [page, queryParams])
 
   const rows = data.rows
   const pools = data.pools
+  const upstreamPlatforms = data.upstreamPlatforms
   const total = data.total
 
   const [mutError, setMutError] = useState('')
   const [open, setOpen] = useState(false)
   const [form, setForm] = useState<ChannelForm>(emptyForm)
+  const [upstreamPreview, setUpstreamPreview] = useState<AdminChannelUpstreamCostPreview | null>(null)
+  const [upstreamLoading, setUpstreamLoading] = useState(false)
+  const [upstreamSyncing, setUpstreamSyncing] = useState(false)
   const [pendingDeleteChannel, setPendingDeleteChannel] = useState<AdminChannel | undefined>()
   const [uploadingIcon, setUploadingIcon] = useState(false)
   const iconUploadRef = useRef<HTMLInputElement>(null)
@@ -725,22 +772,101 @@ export function AdminChannelsPage() {
     [form.id, form.key_pool_id, pools]
   )
 
+  const selectedUpstreamPlatform = useMemo(
+    () => upstreamPlatforms.find((platform) => String(platform.id) === form.upstream_platform_id),
+    [form.upstream_platform_id, upstreamPlatforms]
+  )
+
   function openCreate() {
     setForm(emptyForm)
+    setUpstreamPreview(null)
     setOpen(true)
     setMutError('')
   }
 
   function openEdit(row: AdminChannel) {
     setForm(buildFormFromChannel(row))
+    setUpstreamPreview(null)
     setOpen(true)
     setMutError('')
   }
 
   function openCopy(row: AdminChannel) {
     setForm(buildFormFromChannel(row, true))
+    setUpstreamPreview(null)
     setOpen(true)
     setMutError('')
+  }
+
+  function buildUpstreamCostPayload() {
+    return {
+      platform_id: Number(form.upstream_platform_id || '0'),
+      model: form.upstream_model.trim() || form.model.trim(),
+      group: form.upstream_group.trim(),
+      markup: Number(form.billing_markup || '1') > 0 ? Number(form.billing_markup || '1') : 1,
+    }
+  }
+
+  async function previewUpstreamCost() {
+    if (!form.id) {
+      toast.error('请先保存渠道，再检测上游成本')
+      return
+    }
+    const payload = buildUpstreamCostPayload()
+    if (!payload.platform_id) {
+      toast.error('请选择上游平台')
+      return
+    }
+    setUpstreamLoading(true)
+    setMutError('')
+    try {
+      const result = await adminApi.previewChannelUpstreamCost(form.id, payload)
+      setUpstreamPreview(result)
+      if (!result.found) {
+        toast.error('上游未找到当前模型')
+      } else if (!result.price_available) {
+        toast.warning('上游模型存在，但没有可同步公开成本')
+      } else {
+        toast.success('已获取上游成本')
+      }
+    } catch (err) {
+      const { getApiErrorMessage } = await import('@/lib/api/http')
+      const msg = getApiErrorMessage(err)
+      setMutError(msg)
+      toast.error(msg)
+    } finally {
+      setUpstreamLoading(false)
+    }
+  }
+
+  async function syncUpstreamCost() {
+    if (!form.id) {
+      toast.error('请先保存渠道，再同步上游成本')
+      return
+    }
+    const payload = buildUpstreamCostPayload()
+    if (!payload.platform_id) {
+      toast.error('请选择上游平台')
+      return
+    }
+    setUpstreamSyncing(true)
+    setMutError('')
+    try {
+      const result = await adminApi.syncChannelUpstreamCost(form.id, payload)
+      if (result.channel) {
+        setForm(buildFormFromChannel(result.channel))
+      }
+      setUpstreamPreview(result)
+      toast.success(result.price_synced ? '渠道成本已同步' : '渠道已绑定上游，暂无可同步公开成本')
+      reload()
+    } catch (err) {
+      const { getApiErrorMessage } = await import('@/lib/api/http')
+      const msg = getApiErrorMessage(err)
+      setMutError(msg)
+      toast.error(msg)
+    } finally {
+      setUpstreamSyncing(false)
+    }
   }
 
   function updatePricingGroup(index: number, patch: Partial<PricingGroupForm>) {
@@ -1430,6 +1556,98 @@ export function AdminChannelsPage() {
             {/* ── 计费 ── */}
             <TabsContent value="billing" className="mt-5 max-h-[62vh] overflow-y-auto pr-1">
               <div className="grid gap-5 md:grid-cols-2">
+                <div className="space-y-3 rounded-lg border bg-muted/20 p-4 md:col-span-2">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="space-y-1">
+                      <label className="text-sm font-medium">上游成本同步</label>
+                      <p className="text-xs text-muted-foreground">按当前渠道的标准模型名从上游价表读取成本；检测不会修改渠道配置。</p>
+                    </div>
+                    {upstreamPreview ? (
+                      <div className="flex flex-wrap gap-1.5">
+                        <Badge variant={upstreamPreview.found ? 'default' : 'secondary'}>
+                          {upstreamPreview.found ? '模型存在' : '未找到模型'}
+                        </Badge>
+                        <Badge variant={upstreamPreview.price_available ? 'default' : 'secondary'}>
+                          {upstreamPreview.price_available ? '可同步成本' : '无公开成本'}
+                        </Badge>
+                        <Badge variant={upstreamPreview.base_url_match === false ? 'secondary' : 'outline'}>
+                          {upstreamPreview.base_url_match === false ? 'URL 未匹配' : 'URL 已匹配'}
+                        </Badge>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-4">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium text-muted-foreground">上游平台</label>
+                      <NativeSelect
+                        value={form.upstream_platform_id}
+                        onChange={(event) => {
+                          setUpstreamPreview(null)
+                          setForm((current) => ({ ...current, upstream_platform_id: event.target.value }))
+                        }}
+                      >
+                        <option value="">不绑定</option>
+                        {upstreamPlatforms.map((platform) => (
+                          <option key={platform.id} value={String(platform.id)}>
+                            #{platform.id} {platform.name} ({platform.base_url})
+                          </option>
+                        ))}
+                      </NativeSelect>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium text-muted-foreground">上游模型名</label>
+                      <Input
+                        value={form.upstream_model}
+                        onChange={(event) => {
+                          setUpstreamPreview(null)
+                          setForm((current) => ({ ...current, upstream_model: event.target.value }))
+                        }}
+                        placeholder={form.model || '留空使用标准模型名'}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium text-muted-foreground">上游分组（可选）</label>
+                      <Input
+                        value={form.upstream_group}
+                        onChange={(event) => {
+                          setUpstreamPreview(null)
+                          setForm((current) => ({ ...current, upstream_group: event.target.value }))
+                        }}
+                        placeholder="留空使用基础价"
+                      />
+                    </div>
+                    <div className="flex items-end gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        disabled={!form.id || !form.upstream_platform_id || upstreamLoading}
+                        onClick={previewUpstreamCost}
+                      >
+                        {upstreamLoading ? '检测中...' : '检测成本'}
+                      </Button>
+                      <Button
+                        type="button"
+                        disabled={!form.id || !form.upstream_platform_id || upstreamSyncing}
+                        onClick={syncUpstreamCost}
+                      >
+                        {upstreamSyncing ? '同步中...' : '同步成本'}
+                      </Button>
+                    </div>
+                  </div>
+
+                  {selectedUpstreamPlatform ? (
+                    <p className="text-xs text-muted-foreground">
+                      当前上游：{selectedUpstreamPlatform.name} · {selectedUpstreamPlatform.base_url}
+                    </p>
+                  ) : null}
+                  {upstreamPreview?.billing_config ? (
+                    <p className="text-xs text-muted-foreground">
+                      预览：{formatBillingSummary(upstreamPreview.billing_type, upstreamPreview.billing_config, 'cost')}
+                    </p>
+                  ) : null}
+                </div>
+
                 <div className="space-y-2 md:col-span-2">
                   <label className="text-sm font-medium">计费类型</label>
                   <NativeSelect value={form.billing_type} onChange={(event) => setForm((current) => ({ ...current, billing_type: event.target.value }))}>

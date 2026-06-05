@@ -28,15 +28,15 @@ const (
 )
 
 type upstreamPlatformPayload struct {
-	Name           string `json:"name"`
-	PlatformType   string `json:"platform_type"`
-	BaseURL        string `json:"base_url"`
-	APIKey         string `json:"api_key"`
-	SystemToken    string `json:"system_token"`
-	UpstreamUserID string `json:"upstream_user_id"`
-	UpstreamGroup  string `json:"upstream_group"`
-	Note           string `json:"note"`
-	IsActive       *bool  `json:"is_active"`
+	Name           string  `json:"name"`
+	PlatformType   string  `json:"platform_type"`
+	BaseURL        string  `json:"base_url"`
+	APIKey         string  `json:"api_key"`
+	SystemToken    string  `json:"system_token"`
+	UpstreamUserID *string `json:"upstream_user_id"`
+	UpstreamGroup  *string `json:"upstream_group"`
+	Note           string  `json:"note"`
+	IsActive       *bool   `json:"is_active"`
 }
 
 type upstreamPlatformDTO struct {
@@ -99,6 +99,13 @@ type upstreamChannelBindingCandidate struct {
 	MatchReasons       []string `json:"match_reasons"`
 	PriceAvailable     bool     `json:"price_available"`
 	PriceWillUpdate    bool     `json:"price_will_update"`
+}
+
+type channelUpstreamCostPayload struct {
+	PlatformID int64   `json:"platform_id"`
+	Model      string  `json:"model"`
+	Group      string  `json:"group"`
+	Markup     float64 `json:"markup"`
 }
 
 type upstreamBalanceInfo struct {
@@ -488,10 +495,61 @@ func BindUpstreamPlatformChannels(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
+// GET /admin/channels/:id/upstream-cost
+func PreviewChannelUpstreamCost(c *gin.Context) {
+	ch, ok := loadAdminChannel(c)
+	if !ok {
+		return
+	}
+	platformID, err := strconv.ParseInt(c.Query("platform_id"), 10, 64)
+	if err != nil || platformID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "platform_id 为必填"})
+		return
+	}
+	markup, _ := strconv.ParseFloat(c.DefaultQuery("markup", "1"), 64)
+	result, err := previewChannelUpstreamCost(ch, channelUpstreamCostPayload{
+		PlatformID: platformID,
+		Model:      c.Query("model"),
+		Group:      c.Query("group"),
+		Markup:     markup,
+	})
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+// POST /admin/channels/:id/sync-upstream-cost
+func SyncChannelUpstreamCost(c *gin.Context) {
+	ch, ok := loadAdminChannel(c)
+	if !ok {
+		return
+	}
+	var req channelUpstreamCostPayload
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if req.PlatformID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "platform_id 为必填"})
+		return
+	}
+	result, updated, err := syncChannelUpstreamCost(c.Request.Context(), ch, req)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	result["channel"] = updated
+	c.JSON(http.StatusOK, result)
+}
+
 func upstreamPlatformFromPayload(req upstreamPlatformPayload, existing *model.UpstreamPlatform) (*model.UpstreamPlatform, error) {
 	name := strings.TrimSpace(req.Name)
 	baseURL := normalizeBaseURL(req.BaseURL)
 	platformType := normalizeUpstreamType(req.PlatformType)
+	upstreamUserID := optionalPayloadString(req.UpstreamUserID)
+	upstreamGroup := optionalPayloadString(req.UpstreamGroup)
 	if existing != nil {
 		if name == "" {
 			name = existing.Name
@@ -501,6 +559,12 @@ func upstreamPlatformFromPayload(req upstreamPlatformPayload, existing *model.Up
 		}
 		if req.PlatformType == "" {
 			platformType = normalizeUpstreamType(existing.PlatformType)
+		}
+		if req.UpstreamUserID == nil {
+			upstreamUserID = existing.UpstreamUserID
+		}
+		if req.UpstreamGroup == nil {
+			upstreamGroup = existing.UpstreamGroup
 		}
 	}
 	if name == "" {
@@ -513,8 +577,8 @@ func upstreamPlatformFromPayload(req upstreamPlatformPayload, existing *model.Up
 		Name:            name,
 		PlatformType:    platformType,
 		BaseURL:         baseURL,
-		UpstreamUserID:  strings.TrimSpace(req.UpstreamUserID),
-		UpstreamGroup:   strings.TrimSpace(req.UpstreamGroup),
+		UpstreamUserID:  upstreamUserID,
+		UpstreamGroup:   upstreamGroup,
 		BalanceCurrency: "CNY",
 		Note:            strings.TrimSpace(req.Note),
 		IsActive:        true,
@@ -527,12 +591,6 @@ func upstreamPlatformFromPayload(req upstreamPlatformPayload, existing *model.Up
 		p.BalanceCurrency = existing.BalanceCurrency
 		p.BalanceSyncedAt = existing.BalanceSyncedAt
 		p.IsActive = existing.IsActive
-		if req.UpstreamUserID == "" {
-			p.UpstreamUserID = existing.UpstreamUserID
-		}
-		if req.UpstreamGroup == "" {
-			p.UpstreamGroup = existing.UpstreamGroup
-		}
 	}
 	if req.IsActive != nil {
 		p.IsActive = *req.IsActive
@@ -544,6 +602,13 @@ func upstreamPlatformFromPayload(req upstreamPlatformPayload, existing *model.Up
 		p.SystemTokenEnc = strings.TrimSpace(req.SystemToken)
 	}
 	return p, nil
+}
+
+func optionalPayloadString(raw *string) string {
+	if raw == nil {
+		return ""
+	}
+	return strings.TrimSpace(*raw)
 }
 
 func loadUpstreamPlatform(c *gin.Context) (model.UpstreamPlatform, bool) {
@@ -561,6 +626,38 @@ func loadUpstreamPlatform(c *gin.Context) (model.UpstreamPlatform, bool) {
 		return model.UpstreamPlatform{}, false
 	}
 	return p, true
+}
+
+func loadAdminChannel(c *gin.Context) (model.Channel, bool) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ID 格式错误"})
+		return model.Channel{}, false
+	}
+	var ch model.Channel
+	if found, err := db.Engine.ID(id).Get(&ch); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return model.Channel{}, false
+	} else if !found {
+		c.JSON(http.StatusNotFound, gin.H{"error": "渠道不存在"})
+		return model.Channel{}, false
+	}
+	return ch, true
+}
+
+func loadUpstreamPlatformByID(id int64) (model.UpstreamPlatform, error) {
+	var p model.UpstreamPlatform
+	if id <= 0 {
+		return p, errors.New("platform_id 为必填")
+	}
+	found, err := db.Engine.ID(id).Get(&p)
+	if err != nil {
+		return p, err
+	}
+	if !found {
+		return p, errors.New("平台不存在")
+	}
+	return p, nil
 }
 
 func fetchUpstreamModelInfos(p model.UpstreamPlatform) ([]upstreamModelInfo, error) {
@@ -651,9 +748,10 @@ func fetchSub2APIModels(p model.UpstreamPlatform) ([]upstreamModelInfo, error) {
 }
 
 func modelInfosFromNewAPIPricing(p model.UpstreamPlatform, pricing upstreamPricingResponse) []upstreamModelInfo {
-	group := p.UpstreamGroup
-	if group == "" {
-		group = firstPricingGroup(pricing.GroupRatio)
+	group := strings.TrimSpace(p.UpstreamGroup)
+	groupRatio := 1.0
+	if group != "" {
+		groupRatio = pricing.GroupRatio[group]
 	}
 	seen := map[string]bool{}
 	infos := make([]upstreamModelInfo, 0, len(pricing.Data))
@@ -669,7 +767,7 @@ func modelInfosFromNewAPIPricing(p model.UpstreamPlatform, pricing upstreamPrici
 			ID:            item.ModelName,
 			BillingType:   "token",
 			Protocol:      inferProtocolFromPricing(item),
-			BillingConfig: buildNewAPIBillingConfig(item, pricing.GroupRatio[group], 1),
+			BillingConfig: buildNewAPIBillingConfig(item, groupRatio, 1),
 		}
 		if item.QuotaType == 1 {
 			info.BillingType = "count"
@@ -1301,14 +1399,104 @@ func bindExistingChannelsToUpstream(ctx context.Context, p model.UpstreamPlatfor
 	}, nil
 }
 
+func previewChannelUpstreamCost(ch model.Channel, req channelUpstreamCostPayload) (gin.H, error) {
+	p, info, modelName, found, err := resolveChannelUpstreamCost(ch, req)
+	if err != nil {
+		return nil, err
+	}
+	markup := normalizeMarkup(req.Markup)
+	baseURLMatch := channelMatchesUpstreamBase(ch.BaseURL, p.BaseURL)
+	priceAvailable := found && info.BillingConfig != nil
+	out := gin.H{
+		"platform":        upstreamPlatformToDTO(p),
+		"model":           modelName,
+		"upstream_model":  info.ID,
+		"found":           found,
+		"base_url_match":  baseURLMatch,
+		"price_available": priceAvailable,
+		"billing_type":    info.BillingType,
+		"protocol":        info.Protocol,
+	}
+	if priceAvailable {
+		out["billing_config"] = applyUpstreamMarkup(info.BillingConfig, markup)
+	} else if found {
+		out["price_unavailable"] = true
+	}
+	return out, nil
+}
+
+func syncChannelUpstreamCost(ctx context.Context, ch model.Channel, req channelUpstreamCostPayload) (gin.H, model.Channel, error) {
+	p, info, modelName, found, err := resolveChannelUpstreamCost(ch, req)
+	if err != nil {
+		return nil, model.Channel{}, err
+	}
+	if !found {
+		return nil, model.Channel{}, fmt.Errorf("上游未找到模型: %s", modelName)
+	}
+	priceSynced, priceUnavailable := applyUpstreamBindingUpdate(&ch, p, info, normalizeMarkup(req.Markup), true)
+	if err := service.UpdateChannel(ctx, &ch); err != nil {
+		return nil, model.Channel{}, err
+	}
+	return gin.H{
+		"updated":           1,
+		"price_synced":      boolToCount(priceSynced),
+		"price_unavailable": boolToCount(priceUnavailable),
+		"model":             modelName,
+		"upstream_model":    info.ID,
+		"platform":          upstreamPlatformToDTO(p),
+	}, ch, nil
+}
+
+func resolveChannelUpstreamCost(ch model.Channel, req channelUpstreamCostPayload) (model.UpstreamPlatform, upstreamModelInfo, string, bool, error) {
+	p, err := loadUpstreamPlatformByID(req.PlatformID)
+	if err != nil {
+		return p, upstreamModelInfo{}, "", false, err
+	}
+	p.UpstreamGroup = strings.TrimSpace(req.Group)
+	modelName := resolveChannelUpstreamModel(ch, req.Model)
+	infos, err := fetchUpstreamModelInfos(p)
+	if err != nil {
+		return p, upstreamModelInfo{}, modelName, false, err
+	}
+	infoByModel := buildUpstreamInfoLookup(infos)
+	info, found := lookupUpstreamInfo(infoByModel, modelName)
+	return p, info, modelName, found, nil
+}
+
+func resolveChannelUpstreamModel(ch model.Channel, requested string) string {
+	if modelName := strings.TrimSpace(requested); modelName != "" {
+		return modelName
+	}
+	if ch.BillingConfig != nil {
+		if modelName, _ := ch.BillingConfig["upstream_model"].(string); strings.TrimSpace(modelName) != "" {
+			return strings.TrimSpace(modelName)
+		}
+	}
+	return strings.TrimSpace(ch.Model)
+}
+
+func normalizeMarkup(markup float64) float64 {
+	if markup <= 0 {
+		return 1
+	}
+	return markup
+}
+
+func boolToCount(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
 func applyUpstreamBindingUpdate(ch *model.Channel, p model.UpstreamPlatform, info upstreamModelInfo, markup float64, updatePrice bool) (priceSynced bool, priceUnavailable bool) {
 	if ch.BillingConfig == nil {
 		ch.BillingConfig = model.JSON{}
 	}
 	cfg := cloneJSON(ch.BillingConfig)
-	modelName := strings.TrimSpace(ch.Model)
+	modelName := strings.TrimSpace(info.ID)
 	if modelName == "" {
-		modelName = strings.TrimSpace(info.ID)
+		modelName = strings.TrimSpace(ch.Model)
 	}
 
 	if updatePrice && info.BillingConfig != nil {
@@ -1487,6 +1675,11 @@ func addUpstreamBillingMeta(cfg model.JSON, p model.UpstreamPlatform, modelName 
 	cfg["upstream_platform_type"] = normalizeUpstreamType(p.PlatformType)
 	cfg["upstream_base_url"] = p.BaseURL
 	cfg["upstream_model"] = modelName
+	if strings.TrimSpace(p.UpstreamGroup) != "" {
+		cfg["upstream_group"] = strings.TrimSpace(p.UpstreamGroup)
+	} else {
+		delete(cfg, "upstream_group")
+	}
 	if _, ok := cfg["price_unavailable"]; !ok {
 		cfg["price_unavailable"] = false
 	}
@@ -1633,18 +1826,6 @@ func normalizeUpstreamType(raw string) string {
 
 func isNewAPI(raw string) bool {
 	return normalizeUpstreamType(raw) == upstreamTypeNewAPI
-}
-
-func firstPricingGroup(groupRatio map[string]float64) string {
-	if len(groupRatio) == 0 {
-		return ""
-	}
-	keys := make([]string, 0, len(groupRatio))
-	for k := range groupRatio {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys[0]
 }
 
 func containsString(items []string, target string) bool {
