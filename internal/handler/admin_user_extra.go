@@ -126,6 +126,75 @@ func GetUserOperationLog(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"transactions": ops, "audits": audits})
 }
 
+// GET /admin/users/:id/referrals  用户邀请关系
+func GetUserReferrals(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ID 格式错误"})
+		return
+	}
+
+	var target model.User
+	found, err := db.Engine.ID(id).Cols("id", "inviter_id").Get(&target)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询用户失败"})
+		return
+	}
+	if !found {
+		c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在"})
+		return
+	}
+
+	type referralUser struct {
+		ID        int64     `json:"id" xorm:"id"`
+		Username  string    `json:"username" xorm:"username"`
+		Email     string    `json:"email,omitempty" xorm:"email"`
+		CreatedAt time.Time `json:"created_at" xorm:"created_at"`
+	}
+
+	var inviter *referralUser
+	if target.InviterID != nil {
+		row := referralUser{}
+		found, err := db.Engine.SQL(
+			`SELECT id, username, COALESCE(email, '') AS email, created_at
+			 FROM users
+			 WHERE id = $1`,
+			*target.InviterID,
+		).Get(&row)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "查询邀请人失败"})
+			return
+		}
+		if found {
+			inviter = &row
+		}
+	}
+
+	var invitees []referralUser
+	if err := db.Engine.SQL(
+		`SELECT id, username, COALESCE(email, '') AS email, created_at
+		 FROM users
+		 WHERE inviter_id = $1
+		 ORDER BY created_at DESC, id DESC
+		 LIMIT 500`,
+		id,
+	).Find(&invitees); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询被邀请人失败"})
+		return
+	}
+	if invitees == nil {
+		invitees = []referralUser{}
+	}
+	inviteeCount, _ := db.Engine.Where("inviter_id = ?", id).Count(new(model.User))
+
+	c.JSON(http.StatusOK, gin.H{
+		"inviter":       inviter,
+		"inviter_id":    target.InviterID,
+		"invitees":      invitees,
+		"invitee_count": inviteeCount,
+	})
+}
+
 // GET /admin/api-keys  平台维度 API Key 总览
 func AdminListAPIKeys(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))

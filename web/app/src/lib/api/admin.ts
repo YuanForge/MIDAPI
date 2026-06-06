@@ -85,6 +85,20 @@ export type AdminUser = {
   total_spent?: number
 }
 
+export type AdminReferralUser = {
+  id?: number
+  username?: string
+  email?: string
+  created_at?: string
+}
+
+export type AdminUserReferrals = {
+  inviter?: AdminReferralUser | null
+  inviter_id?: number | null
+  invitees?: AdminReferralUser[]
+  invitee_count?: number
+}
+
 export type AdminTransaction = {
   id?: number
   user_id?: number
@@ -661,6 +675,8 @@ export const adminApi = {
   listChannelLogs: (id: number) =>
     http.get<{ logs: AdminChannelLog[] }>(`/admin/channels/${id}/logs`),
   // 用户扩展
+  getUserReferrals: (id: number) =>
+    http.get<AdminUserReferrals>(`/admin/users/${id}/referrals`),
   getUserPortrait: (id: number) =>
     http.get<AdminUserPortrait>(`/admin/users/${id}/portrait`),
   getUserOperationLog: (id: number) =>

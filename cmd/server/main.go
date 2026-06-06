@@ -255,6 +255,7 @@ func main() {
 			admin.POST("/channels/:id/sync-upstream-cost", handler.SyncChannelUpstreamCost)
 
 			// 用户画像 + 风控标签 + API Key 总览
+			admin.GET("/users/:id/referrals", handler.GetUserReferrals)
 			admin.GET("/users/:id/portrait", handler.GetUserPortrait)
 			admin.GET("/users/:id/operation-log", handler.GetUserOperationLog)
 			admin.POST("/users/:id/risk-labels", handler.AddRiskLabel)

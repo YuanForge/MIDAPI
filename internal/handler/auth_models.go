@@ -52,9 +52,9 @@ func (h *AuthHandler) ListModels(c *gin.Context) {
 	representatives := make(map[string]model.Channel)
 	groupOrder := make([]string, 0, len(channels))
 	for _, ch := range channels {
-		groupKey := ch.Model
-		if ch.DisplayName != "" {
-			groupKey = ch.DisplayName
+		groupKey := service.ChannelRoutingKey(ch)
+		if groupKey == "" {
+			continue
 		}
 		current, exists := representatives[groupKey]
 		if exists {
@@ -82,15 +82,10 @@ func (h *AuthHandler) ListModels(c *gin.Context) {
 				groupPrice = gp
 			}
 		}
-		// routing_model：display_name 非空时用 display_name（路由层也能按其查找），否则用 model
-		routingModel := ch.Model
-		if ch.DisplayName != "" {
-			routingModel = ch.DisplayName
-		}
 		result = append(result, channelInfo{
 			ID:            ch.ID,
 			Name:          displayName,
-			RoutingModel:  routingModel,
+			RoutingModel:  groupKey,
 			ModelProvider: service.EffectiveModelProvider(ch),
 			Type:          ch.Type,
 			Protocol:      ch.Protocol,

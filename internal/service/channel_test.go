@@ -54,3 +54,25 @@ func TestChannelBasePriceForGroupUsesGroupPricing(t *testing.T) {
 		t.Fatalf("expected group price rank 12000000, got %v", got)
 	}
 }
+
+func TestChannelRoutingKeyPrefersDisplayName(t *testing.T) {
+	channel := model.Channel{
+		Model:       "gpt-5.5",
+		DisplayName: "gpt-5.5-cpa",
+	}
+
+	if got := ChannelRoutingKey(channel); got != "gpt-5.5-cpa" {
+		t.Fatalf("expected display_name to be the routing key, got %q", got)
+	}
+}
+
+func TestChannelRoutingKeyFallsBackToModel(t *testing.T) {
+	channel := model.Channel{
+		Model:       "gpt-5.5",
+		DisplayName: "  ",
+	}
+
+	if got := ChannelRoutingKey(channel); got != "gpt-5.5" {
+		t.Fatalf("expected model to be the routing key when display_name is empty, got %q", got)
+	}
+}

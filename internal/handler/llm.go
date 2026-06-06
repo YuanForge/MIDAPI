@@ -63,10 +63,7 @@ func OpenAIModels(c *gin.Context) {
 	seen := make(map[string]bool)
 	data := make([]modelInfo, 0, len(channels))
 	for _, ch := range channels {
-		id := ch.Model
-		if ch.DisplayName != "" {
-			id = ch.DisplayName
-		}
+		id := service.ChannelRoutingKey(ch)
 		if id == "" || seen[id] {
 			continue
 		}

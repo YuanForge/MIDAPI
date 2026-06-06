@@ -34,7 +34,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { adminApi, type AdminUser, type AdminUserPortrait, type AdminAuditLog, type AdminRiskLabel } from '@/lib/api/admin'
+import { adminApi, type AdminUser, type AdminUserPortrait, type AdminAuditLog, type AdminRiskLabel, type AdminUserReferrals } from '@/lib/api/admin'
 import { useAsync } from '@/hooks/use-async'
 
 type DialogMode = 'recharge' | 'password' | 'group' | 'rebate' | 'model_credit' | 'freeze' | 'create' | 'delete' | 'detail' | 'batch_group' | 'batch_freeze' | null
@@ -43,6 +43,16 @@ function fmtBalance(user: AdminUser) {
   const raw = user.balance
   if (raw === undefined || raw === null) return '-'
   return `¥${(Number(raw) / 1e6).toFixed(4)}`
+}
+
+function fmtTime(value?: string) {
+  return value ? new Date(value).toLocaleString('zh-CN') : '-'
+}
+
+function fmtReferralName(user?: { id?: number; username?: string; email?: string } | null) {
+  if (!user) return '无'
+  const name = user.username || user.email || '未命名用户'
+  return `#${user.id ?? '-'} ${name}`
 }
 
 function UserPortraitTab({ userId }: { userId: number }) {
@@ -193,6 +203,70 @@ function UserOplogTab({ userId }: { userId: number }) {
           ))}
         </TableBody>
       </Table>
+    </div>
+  )
+}
+
+function UserReferralsSection({ userId, fallbackInviteCount }: { userId: number; fallbackInviteCount?: number }) {
+  const { data: referrals, loading, error } = useAsync(async () => {
+    return adminApi.getUserReferrals(userId) as Promise<AdminUserReferrals>
+  }, null as AdminUserReferrals | null, [userId])
+
+  const invitees = referrals?.invitees ?? []
+  const inviteeCount = referrals?.invitee_count ?? fallbackInviteCount
+  const inviterText = referrals?.inviter
+    ? fmtReferralName(referrals.inviter)
+    : referrals?.inviter_id
+      ? `#${referrals.inviter_id}（用户已删除或不可用）`
+      : '无'
+
+  return (
+    <div className="border-t pt-3 space-y-3">
+      <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+        <div className="text-muted-foreground">邀请人</div>
+        <div className="truncate">{loading ? '加载中…' : inviterText}</div>
+        <div className="text-muted-foreground">邀请人数</div>
+        <div>
+          {inviteeCount != null ? `${inviteeCount} 人` : '-'}
+          {!loading && inviteeCount != null && inviteeCount > invitees.length ? (
+            <span className="ml-1 text-xs text-muted-foreground">当前展示前 {invitees.length} 人</span>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <p className="text-xs font-medium text-muted-foreground">邀请的人</p>
+        {error ? (
+          <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>
+        ) : loading ? (
+          <div className="rounded-md border px-3 py-6 text-center text-sm text-muted-foreground">加载中…</div>
+        ) : invitees.length === 0 ? (
+          <div className="rounded-md border px-3 py-6 text-center text-sm text-muted-foreground">暂无邀请用户</div>
+        ) : (
+          <div className="max-h-56 overflow-auto rounded-md border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-20">ID</TableHead>
+                  <TableHead>用户名</TableHead>
+                  <TableHead>邮箱</TableHead>
+                  <TableHead className="w-40">注册时间</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {invitees.map((invitee) => (
+                  <TableRow key={invitee.id ?? `${invitee.username}-${invitee.email}`}>
+                    <TableCell className="font-mono text-xs">#{invitee.id ?? '-'}</TableCell>
+                    <TableCell className="max-w-32 truncate text-sm">{invitee.username || '-'}</TableCell>
+                    <TableCell className="max-w-48 truncate text-sm text-muted-foreground">{invitee.email || '-'}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{fmtTime(invitee.created_at)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -592,7 +666,7 @@ export function AdminUsersPage() {
 
       {/* 详情弹窗 */}
       <Dialog open={dialogMode === 'detail'} onOpenChange={() => setDialogMode(null)}>
-        <DialogContent className="sm:max-w-2xl">
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>用户详情</DialogTitle>
             <DialogDescription>{activeUser?.username ?? activeUser?.email ?? '-'}</DialogDescription>
@@ -629,12 +703,12 @@ export function AdminUsersPage() {
                     <div className="text-muted-foreground">返佣比例</div>
                     <div>{activeUser.rebate_ratio != null ? `${(activeUser.rebate_ratio * 100).toFixed(2)}%` : <span className="text-muted-foreground/60">全局默认</span>}</div>
                     <div className="text-muted-foreground">余额</div><div className="font-mono">{fmtBalance(activeUser)}</div>
-                    <div className="text-muted-foreground">邀请人数</div><div>{activeUser.invite_count ?? '-'} 人</div>
                     <div className="text-muted-foreground">历史消费</div>
                     <div className="font-mono">{activeUser.total_spent != null ? `¥${(Number(activeUser.total_spent) / 1e6).toFixed(4)}` : '-'}</div>
                     <div className="text-muted-foreground">注册时间</div>
-                    <div>{activeUser.created_at ? new Date(activeUser.created_at).toLocaleString('zh-CN') : '-'}</div>
+                    <div>{fmtTime(activeUser.created_at)}</div>
                   </div>
+                  {activeUser.id ? <UserReferralsSection userId={activeUser.id} fallbackInviteCount={activeUser.invite_count} /> : null}
                   <div className="border-t pt-3 flex flex-wrap gap-2">
                     <Button size="sm" variant="outline" onClick={() => openDialog(activeUser, 'recharge')}>充值</Button>
                     <Button size="sm" variant="outline" onClick={() => openDialog(activeUser, 'model_credit')}>赠积分</Button>

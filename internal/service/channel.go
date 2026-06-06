@@ -63,10 +63,12 @@ func invalidateChannelRouteCaches(ctx context.Context, channels ...model.Channel
 			keys[fmt.Sprintf("channel:name:%s", ch.Name)] = struct{}{}
 		}
 		if ch.Model != "" {
-			keys[fmt.Sprintf("channel:model:%s", ch.Model)] = struct{}{}
+			keys[legacyChannelModelCachePrefix+ch.Model] = struct{}{}
+			keys[channelModelCachePrefix+ch.Model] = struct{}{}
 		}
-		if ch.DisplayName != "" {
-			keys[fmt.Sprintf("channel:model:%s", ch.DisplayName)] = struct{}{}
+		if routeKey := ChannelRoutingKey(ch); routeKey != "" {
+			keys[legacyChannelModelCachePrefix+routeKey] = struct{}{}
+			keys[channelModelCachePrefix+routeKey] = struct{}{}
 		}
 	}
 	if len(keys) == 0 {
@@ -349,12 +351,23 @@ func DeleteChannel(ctx context.Context, channelID int64) error {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const (
-	channelModelListTTL = 30 * time.Second
+	channelModelListTTL           = 30 * time.Second
+	channelModelCachePrefix       = "channel:model:v2:"
+	legacyChannelModelCachePrefix = "channel:model:"
 	// 错误率窗口：当渠道在 errRateWindow 内的错误率超过 errRateThreshold（需满足最少 errRateMinReqs 次请求）时跳过该渠道。
 	errRateWindow    = 5 * time.Minute
 	errRateThreshold = 0.5 // 错误率 50%
 	errRateMinReqs   = 5   // 触发错误率过滤的最小请求数
 )
+
+// ChannelRoutingKey 返回用户请求时应填写的 model 值。
+// 自定义展示名存在时，它就是对外路由键；否则使用标准模型名。
+func ChannelRoutingKey(ch model.Channel) string {
+	if displayName := strings.TrimSpace(ch.DisplayName); displayName != "" {
+		return displayName
+	}
+	return strings.TrimSpace(ch.Model)
+}
 
 // SelectChannelStable 返回按售价升序排列的可用渠道列表。
 // 稳定密钥使用此函数：先尝试最便宜的渠道，失败后依次尝试更贵的渠道。
@@ -699,7 +712,8 @@ func RecordChannelError(ctx context.Context, channelID int64) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func listChannelsByModel(ctx context.Context, modelName string) ([]model.Channel, error) {
-	cacheKey := fmt.Sprintf("channel:model:%s", modelName)
+	modelName = strings.TrimSpace(modelName)
+	cacheKey := channelModelCachePrefix + modelName
 	data, err := cache.Client.Get(ctx, cacheKey).Bytes()
 	if err == nil {
 		var channels []model.Channel
@@ -708,9 +722,9 @@ func listChannelsByModel(ctx context.Context, modelName string) ([]model.Channel
 		}
 	}
 
-	// 同时匹配 model 字段和 display_name 字段，使 display_name 可作为路由别名使用。
+	// 有 display_name 时只按 display_name 路由；未设置 display_name 时才按标准模型名路由。
 	var channels []model.Channel
-	err = db.Engine.Where("(model = ? OR (display_name != '' AND display_name = ?)) AND is_active = true", modelName, modelName).
+	err = db.Engine.Where("((TRIM(display_name) != '' AND TRIM(display_name) = ?) OR (TRIM(display_name) = '' AND model = ?)) AND is_active = true", modelName, modelName).
 		OrderBy("priority DESC, id ASC").Find(&channels)
 	if err != nil {
 		return nil, err
