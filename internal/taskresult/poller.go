@@ -28,6 +28,11 @@ const (
 	// pollLockTTL 必须大于最大可能的 query_timeout_ms，保证分布式锁在上游 HTTP 调用期间不过期。
 	pollLockTTL           = 120 * time.Second
 	defaultQueryTimeoutMs = 30_000 // channel.QueryTimeoutMs 为 0 时的默认分钟
+
+	// cleanStaleTasks 只兜底清理真正卡死的任务，不能早于 Worker 自身的上游请求超时。
+	minWorkerStaleTimeout     = 10 * time.Minute
+	defaultWorkerStaleTimeout = 30 * time.Minute
+	workerStaleGrace          = 2 * time.Minute
 )
 
 // StartPoller 启动一个 goroutine 定期轮询上游 API 的异步任务
@@ -54,25 +59,58 @@ func StartPoller(ctx context.Context) {
 //   - pending 状态：NATS 消息丢失（Worker 重启等），任务从未被执行
 //   - processing 状态且无 upstream_task_id：Worker 中途崩溃，结果未发布
 //
-// 超过 5 分钟（默认超时兜底）未完成的此类任务一律标为失败并退款。
+// 清理阈值基于渠道 timeout_ms，并额外留出 workerStaleGrace，避免长耗时同步任务
+// （如部分图片生成）仍在等待上游时被误判为僵尸任务。
 func cleanStaleTasks(ctx context.Context) {
-	const staleTimeout = 5 * time.Minute
-	cutoff := time.Now().Add(-staleTimeout)
+	candidateCutoff := time.Now().Add(-minWorkerStaleTimeout)
 
 	var tasks []model.Task
 	err := db.Engine.
-		Where("(status = ? OR (status = ? AND upstream_task_id = '')) AND created_at < ?",
-			"pending", "processing", cutoff).
+		Where("(status = ? OR (status = ? AND upstream_task_id = '')) AND updated_at < ?",
+			"pending", "processing", candidateCutoff).
 		Find(&tasks)
 	if err != nil || len(tasks) == 0 {
 		return
 	}
+	now := time.Now()
 	for i := range tasks {
 		t := &tasks[i]
-		log.Printf("[poller] stale task %d (status=%s, age=%s), marking failed", t.ID, t.Status, time.Since(t.CreatedAt).Round(time.Second))
+		timeout := workerStaleTimeout(ctx, t.ChannelID)
+		lastActiveAt := t.UpdatedAt
+		if lastActiveAt.IsZero() {
+			lastActiveAt = t.CreatedAt
+		}
+		age := now.Sub(lastActiveAt)
+		if age < timeout {
+			continue
+		}
+		log.Printf("[poller] stale task %d (status=%s, idle=%s, timeout=%s), marking failed",
+			t.ID, t.Status, age.Round(time.Second), timeout)
 		failTaskDB(ctx, t.ID, t.UserID, t.ChannelID, t.APIKeyID, t.CorrID, t.CreditsCharged,
-			"task timed out: worker did not complete within "+staleTimeout.String())
+			"task timed out: worker did not complete within "+timeout.String())
 	}
+}
+
+func workerStaleTimeout(ctx context.Context, channelID int64) time.Duration {
+	var timeoutMs int64
+	if ch, err := service.GetChannel(ctx, channelID); err == nil && ch != nil && ch.TimeoutMs > 0 {
+		timeoutMs = ch.TimeoutMs
+	}
+	return calcWorkerStaleTimeout(timeoutMs)
+}
+
+func calcWorkerStaleTimeout(timeoutMs int64) time.Duration {
+	timeout := defaultWorkerStaleTimeout
+	if timeoutMs > 0 {
+		timeout = time.Duration(timeoutMs)*time.Millisecond + workerStaleGrace
+	}
+	if timeout < minWorkerStaleTimeout {
+		timeout = minWorkerStaleTimeout
+	}
+	if timeout > maxAge {
+		timeout = maxAge
+	}
+	return timeout
 }
 
 func pollPendingTasks(ctx context.Context) {
