@@ -39,8 +39,18 @@ import {
 } from '@/components/ui/table'
 import { copyToClipboard } from '@/lib/clipboard'
 import { userApi, type ApiKeyRecord } from '@/lib/api/user'
+import { formatCredits } from '@/lib/formatters/credits'
 import { useAsync } from '@/hooks/use-async'
 import { useSiteSettings } from '@/hooks/use-site-settings'
+
+function keyTypeLabel(type: string | undefined) {
+  if (type === 'stable') return '稳定密钥'
+  return '低价密钥'
+}
+
+function spendText(value: number | undefined) {
+  return `${formatCredits(value ?? 0)} 积分`
+}
 
 export function UserKeysPage() {
   const { data: keys, loading, error: loadError, reload } = useAsync(async () => {
@@ -131,11 +141,13 @@ export function UserKeysPage() {
                 <TableHead>名称</TableHead>
                 <TableHead>Key</TableHead>
                 <TableHead>类型</TableHead>
+                <TableHead className="text-right">今日消耗</TableHead>
+                <TableHead className="text-right">累计消耗</TableHead>
                 <TableHead>状态</TableHead>
                 <TableHead className="text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
-            <TableSkeleton cols={5} rows={3} />
+            <TableSkeleton cols={7} rows={3} />
           </Table>
         </Card>
       ) : keys.length === 0 ? (
@@ -152,6 +164,8 @@ export function UserKeysPage() {
                 <TableHead>名称</TableHead>
                 <TableHead>Key</TableHead>
                 <TableHead>类型</TableHead>
+                <TableHead className="text-right">今日消耗</TableHead>
+                <TableHead className="text-right">累计消耗</TableHead>
                 <TableHead>状态</TableHead>
                 <TableHead className="text-right">操作</TableHead>
               </TableRow>
@@ -167,7 +181,29 @@ export function UserKeysPage() {
                         ? `${item.key_prefix}...`
                         : (item.masked_key ?? '***')}
                   </TableCell>
-                  <TableCell>{item.key_type ?? 'low_price'}</TableCell>
+                  <TableCell>{keyTypeLabel(item.key_type)}</TableCell>
+                  <TableCell className="text-right font-mono text-sm">
+                    <span
+                      className={
+                        (item.today_consumed ?? 0) > 0
+                          ? 'font-semibold text-red-500'
+                          : 'text-muted-foreground'
+                      }
+                    >
+                      {spendText(item.today_consumed)}
+                    </span>
+                  </TableCell>
+                  <TableCell className="text-right font-mono text-sm">
+                    <span
+                      className={
+                        (item.total_consumed ?? 0) > 0
+                          ? 'font-semibold text-red-500'
+                          : 'text-muted-foreground'
+                      }
+                    >
+                      {spendText(item.total_consumed)}
+                    </span>
+                  </TableCell>
                   <TableCell>
                     <Badge variant={item.is_active === false ? 'secondary' : 'default'}>
                       {item.is_active === false ? '停用' : '启用'}

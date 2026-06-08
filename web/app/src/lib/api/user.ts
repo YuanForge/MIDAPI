@@ -44,6 +44,8 @@ export type ApiKeyRecord = {
   masked_key?: string
   key_type?: string
   is_active?: boolean
+  total_consumed?: number
+  today_consumed?: number
   last_used_at?: string | null
   created_at?: string
 }

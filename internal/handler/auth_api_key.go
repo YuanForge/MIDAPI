@@ -6,6 +6,7 @@ import (
 	"fanapi/internal/service"
 	"github.com/gin-gonic/gin"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -42,17 +43,24 @@ func (h *AuthHandler) ListAPIKeys(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	spendStats, err := loadAPIKeySpendStats(userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 
 	type apiKeyItem struct {
-		ID         int64       `json:"id"`
-		Name       string      `json:"name"`
-		KeyType    string      `json:"key_type"`
-		KeyPrefix  string      `json:"key_prefix"`
-		RawKey     string      `json:"raw_key"`
-		Viewable   bool        `json:"viewable"`
-		IsActive   bool        `json:"is_active"`
-		LastUsedAt interface{} `json:"last_used_at"`
-		CreatedAt  interface{} `json:"created_at"`
+		ID            int64       `json:"id"`
+		Name          string      `json:"name"`
+		KeyType       string      `json:"key_type"`
+		KeyPrefix     string      `json:"key_prefix"`
+		RawKey        string      `json:"raw_key"`
+		Viewable      bool        `json:"viewable"`
+		IsActive      bool        `json:"is_active"`
+		TotalConsumed int64       `json:"total_consumed"`
+		TodayConsumed int64       `json:"today_consumed"`
+		LastUsedAt    interface{} `json:"last_used_at"`
+		CreatedAt     interface{} `json:"created_at"`
 	}
 
 	items := make([]apiKeyItem, 0, len(keys))
@@ -75,20 +83,73 @@ func (h *AuthHandler) ListAPIKeys(c *gin.Context) {
 		if keyType == "" {
 			keyType = "low_price"
 		}
+		stats := spendStats[k.ID]
 		items = append(items, apiKeyItem{
-			ID:         k.ID,
-			Name:       k.Name,
-			KeyType:    keyType,
-			KeyPrefix:  prefix,
-			RawKey:     rawKey,
-			Viewable:   viewable,
-			IsActive:   k.IsActive,
-			LastUsedAt: k.LastUsedAt,
-			CreatedAt:  k.CreatedAt,
+			ID:            k.ID,
+			Name:          k.Name,
+			KeyType:       keyType,
+			KeyPrefix:     prefix,
+			RawKey:        rawKey,
+			Viewable:      viewable,
+			IsActive:      k.IsActive,
+			TotalConsumed: stats.TotalConsumed,
+			TodayConsumed: stats.TodayConsumed,
+			LastUsedAt:    k.LastUsedAt,
+			CreatedAt:     k.CreatedAt,
 		})
 	}
 
 	c.JSON(http.StatusOK, gin.H{"api_keys": items})
+}
+
+type apiKeySpendStats struct {
+	TotalConsumed int64
+	TodayConsumed int64
+}
+
+func loadAPIKeySpendStats(userID int64) (map[int64]apiKeySpendStats, error) {
+	rows, err := db.Engine.QueryString(`
+		SELECT api_key_id,
+			COALESCE(SUM(CASE
+				WHEN type IN ('charge','hold','settle','consume') THEN credits
+				WHEN type = 'refund' THEN -credits
+				ELSE 0 END), 0) AS total_consumed,
+			COALESCE(SUM(CASE
+				WHEN created_at >= CURRENT_DATE THEN
+					CASE
+						WHEN type IN ('charge','hold','settle','consume') THEN credits
+						WHEN type = 'refund' THEN -credits
+						ELSE 0
+					END
+				ELSE 0 END), 0) AS today_consumed
+		FROM billing_transactions
+		WHERE user_id = ? AND api_key_id > 0
+		GROUP BY api_key_id`, userID)
+	if err != nil {
+		return nil, err
+	}
+	stats := make(map[int64]apiKeySpendStats, len(rows))
+	for _, row := range rows {
+		keyID := parseInt64Field(row, "api_key_id")
+		if keyID <= 0 {
+			continue
+		}
+		total := parseInt64Field(row, "total_consumed")
+		today := parseInt64Field(row, "today_consumed")
+		if total < 0 {
+			total = 0
+		}
+		if today < 0 {
+			today = 0
+		}
+		stats[keyID] = apiKeySpendStats{TotalConsumed: total, TodayConsumed: today}
+	}
+	return stats, nil
+}
+
+func parseInt64Field(row map[string]string, key string) int64 {
+	v, _ := strconv.ParseInt(row[key], 10, 64)
+	return v
 }
 
 // DELETE /user/apikeys/:id

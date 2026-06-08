@@ -9,6 +9,13 @@ func TestUserFacingErrorMessageHidesUpstreamNetworkDetails(t *testing.T) {
 	}
 }
 
+func TestUserFacingErrorMessageHidesConnectionResetDetails(t *testing.T) {
+	msg := `upstream error: Post "https://api.apimart.ai/v1/images/generations": read tcp 172.19.0.2:42354->104.26.11.94:443: read: connection reset by peer`
+	if got := UserFacingErrorMessage(msg); got != genericUpstreamErrorMessage {
+		t.Fatalf("expected generic upstream message, got %q", got)
+	}
+}
+
 func TestUserFacingErrorMessageKeepsBusinessMessage(t *testing.T) {
 	msg := "余额不足"
 	if got := UserFacingErrorMessage(msg); got != msg {

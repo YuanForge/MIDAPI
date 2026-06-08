@@ -25,6 +25,17 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+const maxUpstreamNetworkAttempts = 2
+
+var upstreamHTTPTransport = func() *http.Transport {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	// 部分 OpenAI 兼容图片上游会在复用连接或 HTTP/2 链路上直接 reset。
+	// Worker 请求通常是长耗时媒体生成，优先选择每次新建 HTTP/1.1 连接来换稳定性。
+	tr.DisableKeepAlives = true
+	tr.ForceAttemptHTTP2 = false
+	return tr
+}()
+
 // StartWorkers 根据 WorkerConfig 订阅 NATS 任务主题。
 //
 // 默认（未配置）：订阅 "task.>"  ，consumer 名为 "workers-all"。
@@ -317,7 +328,7 @@ func callUpstream(job *model.TaskJob, payload map[string]interface{}) (map[strin
 	if timeout <= 0 {
 		timeout = 60 * time.Second
 	}
-	client := &http.Client{Timeout: timeout}
+	client := &http.Client{Timeout: timeout, Transport: upstreamHTTPTransport}
 
 	// 支持 requestScript 动态指定 _url；否则回退到渠道 base_url。
 	targetURL := job.BaseURL
@@ -334,11 +345,6 @@ func callUpstream(job *model.TaskJob, payload map[string]interface{}) (map[strin
 	if v, ok := payload["_method"].(string); ok && strings.TrimSpace(v) != "" {
 		method = v
 	}
-	req, err := http.NewRequest(method, targetURL, bytes.NewReader(body))
-	if err != nil {
-		return nil, 0, err
-	}
-	// 应用渠道 Header，支持 {{}} / {{pool_key}} 占位符替换
 	headers := make(map[string]interface{}, len(job.Headers)+1)
 	for k, v := range job.Headers {
 		headers[k] = v
@@ -348,38 +354,86 @@ func callUpstream(job *model.TaskJob, payload map[string]interface{}) (map[strin
 			headers[k] = v
 		}
 	}
-	for k, v := range headers {
-		if sv, ok := v.(string); ok {
-			req.Header.Set(k, ResolveHeaderValue(sv, job.PoolKeyValue))
-		}
-	}
 	if contentType == "" {
 		contentType = "application/json"
 	}
-	req.Header.Set("Content-Type", contentType)
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer resp.Body.Close()
+	var lastErr error
+	for attempt := 1; attempt <= maxUpstreamNetworkAttempts; attempt++ {
+		req, err := http.NewRequest(method, targetURL, bytes.NewReader(body))
+		if err != nil {
+			return nil, 0, err
+		}
+		// 应用渠道 Header，支持 {{}} / {{pool_key}} 占位符替换
+		for k, v := range headers {
+			if sv, ok := v.(string); ok {
+				req.Header.Set(k, ResolveHeaderValue(sv, job.PoolKeyValue))
+			}
+		}
+		req.Header.Set("Content-Type", contentType)
+		if req.Header.Get("Accept") == "" {
+			req.Header.Set("Accept", "application/json")
+		}
+		if req.Header.Get("User-Agent") == "" {
+			req.Header.Set("User-Agent", "FanAPI/1.0")
+		}
+		if job.CorrID != "" && req.Header.Get("Idempotency-Key") == "" {
+			req.Header.Set("Idempotency-Key", job.CorrID)
+		}
+		req.Close = true
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, resp.StatusCode, err
-	}
-	if resp.StatusCode == http.StatusTooManyRequests || isPoolKeyRetryStatus(resp.StatusCode) {
-		return nil, resp.StatusCode, nil
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, resp.StatusCode, fmt.Errorf("upstream returned %d: %s", resp.StatusCode, string(respBody))
-	}
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			if attempt < maxUpstreamNetworkAttempts && isRetryableUpstreamNetworkError(err) {
+				log.Printf("[worker] task %d: transient upstream network error on attempt %d/%d: %v", job.TaskID, attempt, maxUpstreamNetworkAttempts, err)
+				time.Sleep(time.Duration(attempt) * 350 * time.Millisecond)
+				continue
+			}
+			return nil, 0, err
+		}
+		defer resp.Body.Close()
 
-	var result map[string]interface{}
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return nil, resp.StatusCode, fmt.Errorf("upstream response not JSON: %w", err)
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, resp.StatusCode, err
+		}
+		if resp.StatusCode == http.StatusTooManyRequests || isPoolKeyRetryStatus(resp.StatusCode) {
+			return nil, resp.StatusCode, nil
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, resp.StatusCode, fmt.Errorf("upstream returned %d: %s", resp.StatusCode, string(respBody))
+		}
+
+		var result map[string]interface{}
+		if err := json.Unmarshal(respBody, &result); err != nil {
+			return nil, resp.StatusCode, fmt.Errorf("upstream response not JSON: %w", err)
+		}
+		return result, resp.StatusCode, nil
 	}
-	return result, resp.StatusCode, nil
+	if lastErr != nil {
+		return nil, 0, lastErr
+	}
+	return nil, 0, fmt.Errorf("upstream request failed")
+}
+
+func isRetryableUpstreamNetworkError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"connection reset by peer",
+		"server closed idle connection",
+		"unexpected eof",
+		"eof",
+		"use of closed network connection",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func buildUpstreamBody(job *model.TaskJob, payload, bodyPayload map[string]interface{}, bodyType string) ([]byte, string, error) {
