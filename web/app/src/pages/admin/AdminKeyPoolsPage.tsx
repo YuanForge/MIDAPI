@@ -1,4 +1,6 @@
 import { useState } from 'react'
+import { PlusCircleIcon, RefreshCwIcon } from 'lucide-react'
+import { toast } from 'sonner'
 
 import { PageHeader } from '@/components/shared/PageHeader'
 import { TableSkeleton } from '@/components/shared/TableSkeleton'
@@ -35,7 +37,13 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { adminApi, type AdminChannel, type AdminKeyPool, type AdminPoolKey } from '@/lib/api/admin'
+import {
+  adminApi,
+  type AdminChannel,
+  type AdminKeyPool,
+  type AdminKeyPoolSyncResult,
+  type AdminPoolKey,
+} from '@/lib/api/admin'
 import { useAsync } from '@/hooks/use-async'
 
 export function AdminKeyPoolsPage() {
@@ -75,6 +83,7 @@ export function AdminKeyPoolsPage() {
   const [bindingPool, setBindingPool] = useState<AdminKeyPool | null>(null)
   const [boundChannels, setBoundChannels] = useState<AdminChannel[]>([])
   const [bindingLoading, setBindingLoading] = useState(false)
+  const [syncingPoolId, setSyncingPoolId] = useState<number | null>(null)
 
   const error = loadError || mutError
 
@@ -250,6 +259,42 @@ export function AdminKeyPoolsPage() {
     }
   }
 
+  function formatSyncResult(result: AdminKeyPoolSyncResult) {
+    const parts = [
+      `导入 ${result.imported ?? 0}`,
+      `恢复 ${result.reactivated ?? 0}`,
+      `跳过 ${result.skipped ?? 0}`,
+    ]
+    if (result.created_upstream) {
+      parts.push(`新建上游 ${result.created_upstream}`)
+    }
+    if (result.skipped_by_lock) {
+      parts.push('已有同步任务在执行')
+    }
+    return parts.join('，')
+  }
+
+  async function syncUpstreamKeys(pool: AdminKeyPool, ensure = false) {
+    if (!pool.id) return
+    setMutError('')
+    setSyncingPoolId(pool.id)
+    try {
+      const result = await adminApi.syncKeyPoolFromUpstream(pool.id, ensure)
+      toast.success(`上游 Key 已同步：${formatSyncResult(result)}`)
+      reload()
+      if (keyOpen && activePool?.id === pool.id) {
+        await openKeys(pool)
+      }
+    } catch (err) {
+      const { getApiErrorMessage } = await import('@/lib/api/http')
+      const msg = getApiErrorMessage(err)
+      setMutError(msg)
+      toast.error(msg)
+    } finally {
+      setSyncingPoolId(null)
+    }
+  }
+
   function channelLabel(channel: AdminChannel) {
     return `${channel.name ?? '未命名渠道'} · ${channel.type ?? 'unknown'} · #${channel.id}`
   }
@@ -315,9 +360,17 @@ export function AdminKeyPoolsPage() {
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right">
-                      <div className="flex justify-end gap-2">
+                      <div className="flex flex-wrap justify-end gap-2">
                         <Button size="sm" variant="outline" onClick={() => openKeys(pool)}>管理 Keys</Button>
                         <Button size="sm" variant="outline" onClick={() => openBinding(pool)}>绑定渠道</Button>
+                        <Button size="sm" variant="outline" disabled={syncingPoolId === pool.id} onClick={() => syncUpstreamKeys(pool)}>
+                          <RefreshCwIcon className={`mr-1 h-3.5 w-3.5 ${syncingPoolId === pool.id ? 'animate-spin' : ''}`} />
+                          {syncingPoolId === pool.id ? '同步中' : '同步上游'}
+                        </Button>
+                        <Button size="sm" variant="outline" disabled={syncingPoolId === pool.id} onClick={() => syncUpstreamKeys(pool, true)}>
+                          <PlusCircleIcon className="mr-1 h-3.5 w-3.5" />
+                          补新 Key
+                        </Button>
                         <Button size="sm" variant="outline" onClick={() => togglePool(pool)}>
                           {pool.is_active ? '停用' : '启用'}
                         </Button>
@@ -363,6 +416,18 @@ export function AdminKeyPoolsPage() {
             <Input value={priority} onChange={(event) => setPriority(event.target.value)} placeholder="优先级" />
             <Button onClick={addKey}>添加 Key</Button>
             <Button variant="outline" onClick={() => { setImportOpen(true); setImportResult(null) }}>批量导入</Button>
+            {activePool ? (
+              <>
+                <Button variant="outline" disabled={syncingPoolId === activePool.id} onClick={() => syncUpstreamKeys(activePool)}>
+                  <RefreshCwIcon className={`mr-1 h-4 w-4 ${syncingPoolId === activePool.id ? 'animate-spin' : ''}`} />
+                  {syncingPoolId === activePool.id ? '同步中' : '同步上游'}
+                </Button>
+                <Button variant="outline" disabled={syncingPoolId === activePool.id} onClick={() => syncUpstreamKeys(activePool, true)}>
+                  <PlusCircleIcon className="mr-1 h-4 w-4" />
+                  补新 Key
+                </Button>
+              </>
+            ) : null}
           </div>
           {importOpen ? (
             <div className="space-y-2 rounded-md border p-3">

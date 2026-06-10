@@ -107,23 +107,20 @@ func AdminListLLMLogs(c *gin.Context) {
 			Cost    int64  `xorm:"cost"`
 			PoolKey int64  `xorm:"pool_key_id"`
 		}
-		placeholders := make([]string, len(logs))
-		args := make([]interface{}, len(logs))
-		for i, l := range logs {
-			placeholders[i] = fmt.Sprintf("$%d", i+1)
-			args[i] = l.CorrID
-		}
-		sqlStr := `SELECT corr_id,
-			COALESCE(SUM(CASE WHEN type IN ('hold','charge','settle') THEN credits WHEN type='refund' THEN -credits ELSE 0 END),0) AS credits,
-			COALESCE(SUM(CASE WHEN type IN ('hold','charge','settle') THEN cost    WHEN type='refund' THEN -cost    ELSE 0 END),0) AS cost,
-			COALESCE(MAX(pool_key_id), 0) AS pool_key_id
-			FROM billing_transactions WHERE corr_id IN (` + strings.Join(placeholders, ",") + `) GROUP BY corr_id`
-		var rows []txRow
-		_ = db.Engine.SQL(sqlStr, args...).Find(&rows)
-		for _, r := range rows {
-			creditsMap[r.CorrID] = r.Credits
-			costMap[r.CorrID] = r.Cost
-			poolKeyMap[r.CorrID] = r.PoolKey
+		corrIDFilter, args := billingCorrIDFilter(logs)
+		if corrIDFilter != "" {
+			sqlStr := `SELECT corr_id,
+				COALESCE(SUM(CASE WHEN type IN ('hold','charge','settle') THEN credits WHEN type='refund' THEN -credits ELSE 0 END),0) AS credits,
+				COALESCE(SUM(CASE WHEN type IN ('hold','charge','settle') THEN cost    WHEN type='refund' THEN -cost    ELSE 0 END),0) AS cost,
+				COALESCE(MAX(pool_key_id), 0) AS pool_key_id
+				FROM billing_transactions WHERE ` + corrIDFilter + ` GROUP BY corr_id`
+			var rows []txRow
+			_ = db.Engine.SQL(sqlStr, args...).Find(&rows)
+			for _, r := range rows {
+				creditsMap[r.CorrID] = r.Credits
+				costMap[r.CorrID] = r.Cost
+				poolKeyMap[r.CorrID] = r.PoolKey
+			}
 		}
 	}
 
@@ -214,6 +211,26 @@ func AdminGetLLMLog(c *gin.Context) {
 	c.JSON(http.StatusOK, log)
 }
 
+// billingCorrIDFilter builds a non-empty corr_id filter that can use the partial corr_id index.
+func billingCorrIDFilter(logs []model.LLMLog) (string, []interface{}) {
+	seen := make(map[string]bool, len(logs))
+	args := make([]interface{}, 0, len(logs))
+	placeholders := make([]string, 0, len(logs))
+	for _, l := range logs {
+		corrID := strings.TrimSpace(l.CorrID)
+		if corrID == "" || seen[corrID] {
+			continue
+		}
+		seen[corrID] = true
+		args = append(args, corrID)
+		placeholders = append(placeholders, fmt.Sprintf("$%d", len(args)))
+	}
+	if len(args) == 0 {
+		return "", nil
+	}
+	return "corr_id != '' AND corr_id IN (" + strings.Join(placeholders, ",") + ")", args
+}
+
 // GET /v1/llm-logs  (用户查自己的日志，不含 upstream_request 详情)
 func UserListLLMLogs(c *gin.Context) {
 	userID := c.MustGet("user_id").(int64)
@@ -299,19 +316,16 @@ func UserListLLMLogs(c *gin.Context) {
 			CorrID  string `xorm:"corr_id"`
 			Credits int64  `xorm:"credits"`
 		}
-		var rows []txRow
-		placeholders2 := make([]string, len(logs))
-		args2 := make([]interface{}, len(logs))
-		for i, l := range logs {
-			placeholders2[i] = fmt.Sprintf("$%d", i+1)
-			args2[i] = l.CorrID
-		}
-		sqlStr2 := `SELECT corr_id,
-			COALESCE(SUM(CASE WHEN type IN ('hold','charge','settle') THEN credits WHEN type='refund' THEN -credits ELSE 0 END),0) AS credits
-			FROM billing_transactions WHERE corr_id IN (` + strings.Join(placeholders2, ",") + `) GROUP BY corr_id`
-		_ = db.Engine.SQL(sqlStr2, args2...).Find(&rows)
-		for _, r := range rows {
-			creditsMap[r.CorrID] = r.Credits
+		corrIDFilter, args := billingCorrIDFilter(logs)
+		if corrIDFilter != "" {
+			var rows []txRow
+			sqlStr := `SELECT corr_id,
+				COALESCE(SUM(CASE WHEN type IN ('hold','charge','settle') THEN credits WHEN type='refund' THEN -credits ELSE 0 END),0) AS credits
+				FROM billing_transactions WHERE ` + corrIDFilter + ` GROUP BY corr_id`
+			_ = db.Engine.SQL(sqlStr, args...).Find(&rows)
+			for _, r := range rows {
+				creditsMap[r.CorrID] = r.Credits
+			}
 		}
 	}
 
