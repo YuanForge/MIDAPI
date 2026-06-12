@@ -256,9 +256,21 @@ func createTask(c *gin.Context, taskType string, reqData map[string]interface{})
 	// 稳定密钥：将剩余待试渠道 ID（跳过当前渠道）按价格升序存入 RetryChannelIDs，
 	// 同步路径由 result-proc 直接消费 WorkerResult 中的字段；异步路径由 poller 从 task 表读取。
 	var retryChannelIDs []int64
-	for i := range stableChannels {
-		if stableChannels[i].ID != channelID {
-			retryChannelIDs = append(retryChannelIDs, stableChannels[i].ID)
+	if len(stableChannels) > 0 {
+		for i := range stableChannels {
+			if stableChannels[i].ID != channelID {
+				retryChannelIDs = append(retryChannelIDs, stableChannels[i].ID)
+			}
+		}
+	} else if routingKey != "" {
+		excluded := []int64{channelID}
+		for len(retryChannelIDs) < 2 {
+			nextCh, err := service.SelectChannelByWeight(c.Request.Context(), routingKey, excluded...)
+			if err != nil || nextCh == nil {
+				break
+			}
+			retryChannelIDs = append(retryChannelIDs, nextCh.ID)
+			excluded = append(excluded, nextCh.ID)
 		}
 	}
 

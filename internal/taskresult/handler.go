@@ -77,6 +77,8 @@ func handleResult(msg *nats.Msg) {
 		retryErrMsg := ""
 		if res.PoolKeyID <= 0 {
 			retryErrMsg = "pool key retry unavailable"
+		} else if res.PoolKeyCreatedUpstream {
+			retryErrMsg = "new upstream pool key returned rate limit"
 		} else if len(triedKeyIDs) >= maxPoolKeyExhaustRetries {
 			retryErrMsg = "pool key exhausted after retry"
 		} else {
@@ -84,34 +86,35 @@ func handleResult(msg *nats.Msg) {
 			if err != nil {
 				retryErrMsg = "rate limited + channel load failed: " + err.Error()
 			} else {
-				newKey, err := service.MarkExhaustedAndRotate(ctx, ch.KeyPoolID, res.PoolKeyID, res.UserID)
+				newKey, syncResult, err := service.MarkExhaustedAndRotateWithSync(ctx, ch.KeyPoolID, res.PoolKeyID, res.UserID)
 				if err == nil && newKey != nil {
 					job := &model.TaskJob{
-						TaskID:          res.TaskID,
-						TaskType:        res.TaskType,
-						UserID:          res.UserID,
-						APIKeyID:        res.APIKeyID,
-						CorrID:          res.CorrID,
-						CreditsCharged:  res.CreditsCharged,
-						ChannelID:       res.ChannelID,
-						BaseURL:         ch.BaseURL,
-						Method:          ch.Method,
-						Headers:         ch.Headers,
-						TimeoutMs:       ch.TimeoutMs,
-						QueryTimeoutMs:  ch.QueryTimeoutMs,
-						RequestScript:   ch.RequestScript,
-						ResponseScript:  ch.ResponseScript,
-						ErrorScript:     ch.ErrorScript,
-						QueryURL:        ch.QueryURL,
-						QueryMethod:     ch.QueryMethod,
-						QueryScript:     ch.QueryScript,
-						PoolKeyID:       newKey.ID,
-						PoolKeyValue:    newKey.Value,
-						PoolKeyBaseURL:  newKey.BaseURLOverride,
-						Payload:         res.Payload,
-						RetryCount:      res.RetryCount + 1,
-						PoolRetryKeyIDs: triedKeyIDs,
-						RetryChannelIDs: res.RetryChannelIDs, // 透传：429 轮转 Key 重试若仍失败，仍可触发稳定密钥换渠道重试
+						TaskID:                 res.TaskID,
+						TaskType:               res.TaskType,
+						UserID:                 res.UserID,
+						APIKeyID:               res.APIKeyID,
+						CorrID:                 res.CorrID,
+						CreditsCharged:         res.CreditsCharged,
+						ChannelID:              res.ChannelID,
+						BaseURL:                ch.BaseURL,
+						Method:                 ch.Method,
+						Headers:                ch.Headers,
+						TimeoutMs:              ch.TimeoutMs,
+						QueryTimeoutMs:         ch.QueryTimeoutMs,
+						RequestScript:          ch.RequestScript,
+						ResponseScript:         ch.ResponseScript,
+						ErrorScript:            ch.ErrorScript,
+						QueryURL:               ch.QueryURL,
+						QueryMethod:            ch.QueryMethod,
+						QueryScript:            ch.QueryScript,
+						PoolKeyID:              newKey.ID,
+						PoolKeyValue:           newKey.Value,
+						PoolKeyBaseURL:         newKey.BaseURLOverride,
+						Payload:                res.Payload,
+						RetryCount:             res.RetryCount + 1,
+						PoolRetryKeyIDs:        triedKeyIDs,
+						PoolKeyCreatedUpstream: syncResult.CreatedUpstream > 0,
+						RetryChannelIDs:        res.RetryChannelIDs, // 透传：429 轮转 Key 重试若仍失败，仍可触发稳定密钥换渠道重试
 					}
 					data, _ := json.Marshal(job)
 					subject := fmt.Sprintf("task.%s.%d", res.TaskType, res.ChannelID)
@@ -137,31 +140,32 @@ func handleResult(msg *nats.Msg) {
 			newKey, rotateErr := service.RotatePoolKeySkipping(ctx, poolRetryChannel.KeyPoolID, res.UserID, triedKeyIDs)
 			if rotateErr == nil && newKey != nil {
 				job := &model.TaskJob{
-					TaskID:          res.TaskID,
-					TaskType:        res.TaskType,
-					UserID:          res.UserID,
-					APIKeyID:        res.APIKeyID,
-					CorrID:          res.CorrID,
-					CreditsCharged:  res.CreditsCharged,
-					ChannelID:       res.ChannelID,
-					BaseURL:         poolRetryChannel.BaseURL,
-					Method:          poolRetryChannel.Method,
-					Headers:         poolRetryChannel.Headers,
-					TimeoutMs:       poolRetryChannel.TimeoutMs,
-					QueryTimeoutMs:  poolRetryChannel.QueryTimeoutMs,
-					RequestScript:   poolRetryChannel.RequestScript,
-					ResponseScript:  poolRetryChannel.ResponseScript,
-					ErrorScript:     poolRetryChannel.ErrorScript,
-					QueryURL:        poolRetryChannel.QueryURL,
-					QueryMethod:     poolRetryChannel.QueryMethod,
-					QueryScript:     poolRetryChannel.QueryScript,
-					PoolKeyID:       newKey.ID,
-					PoolKeyValue:    newKey.Value,
-					PoolKeyBaseURL:  newKey.BaseURLOverride,
-					Payload:         res.Payload,
-					RetryCount:      res.RetryCount,
-					PoolRetryKeyIDs: triedKeyIDs,
-					RetryChannelIDs: res.RetryChannelIDs,
+					TaskID:                 res.TaskID,
+					TaskType:               res.TaskType,
+					UserID:                 res.UserID,
+					APIKeyID:               res.APIKeyID,
+					CorrID:                 res.CorrID,
+					CreditsCharged:         res.CreditsCharged,
+					ChannelID:              res.ChannelID,
+					BaseURL:                poolRetryChannel.BaseURL,
+					Method:                 poolRetryChannel.Method,
+					Headers:                poolRetryChannel.Headers,
+					TimeoutMs:              poolRetryChannel.TimeoutMs,
+					QueryTimeoutMs:         poolRetryChannel.QueryTimeoutMs,
+					RequestScript:          poolRetryChannel.RequestScript,
+					ResponseScript:         poolRetryChannel.ResponseScript,
+					ErrorScript:            poolRetryChannel.ErrorScript,
+					QueryURL:               poolRetryChannel.QueryURL,
+					QueryMethod:            poolRetryChannel.QueryMethod,
+					QueryScript:            poolRetryChannel.QueryScript,
+					PoolKeyID:              newKey.ID,
+					PoolKeyValue:           newKey.Value,
+					PoolKeyBaseURL:         newKey.BaseURLOverride,
+					Payload:                res.Payload,
+					RetryCount:             res.RetryCount,
+					PoolRetryKeyIDs:        triedKeyIDs,
+					PoolKeyCreatedUpstream: false,
+					RetryChannelIDs:        res.RetryChannelIDs,
 				}
 				updateProcessingTask(ctx, res.TaskID, upstreamReq, upstreamResp)
 				data, _ := json.Marshal(job)
@@ -303,29 +307,30 @@ func handleResult(msg *nats.Msg) {
 
 				// 重新发布到新渠道
 				retryJob := &model.TaskJob{
-					TaskID:          res.TaskID,
-					TaskType:        res.TaskType,
-					UserID:          res.UserID,
-					APIKeyID:        res.APIKeyID,
-					CorrID:          newCorrID,
-					CreditsCharged:  newCost,
-					ChannelID:       nextChannelID,
-					BaseURL:         nextCh.BaseURL,
-					Method:          nextCh.Method,
-					Headers:         nextCh.Headers,
-					TimeoutMs:       nextCh.TimeoutMs,
-					QueryTimeoutMs:  nextCh.QueryTimeoutMs,
-					RequestScript:   nextCh.RequestScript,
-					ResponseScript:  nextCh.ResponseScript,
-					ErrorScript:     nextCh.ErrorScript,
-					QueryURL:        nextCh.QueryURL,
-					QueryMethod:     nextCh.QueryMethod,
-					QueryScript:     nextCh.QueryScript,
-					PoolKeyID:       poolKeyID,
-					PoolKeyValue:    poolKeyValue,
-					PoolKeyBaseURL:  poolKeyBaseURL,
-					Payload:         res.Payload,
-					RetryChannelIDs: remaining,
+					TaskID:                 res.TaskID,
+					TaskType:               res.TaskType,
+					UserID:                 res.UserID,
+					APIKeyID:               res.APIKeyID,
+					CorrID:                 newCorrID,
+					CreditsCharged:         newCost,
+					ChannelID:              nextChannelID,
+					BaseURL:                nextCh.BaseURL,
+					Method:                 nextCh.Method,
+					Headers:                nextCh.Headers,
+					TimeoutMs:              nextCh.TimeoutMs,
+					QueryTimeoutMs:         nextCh.QueryTimeoutMs,
+					RequestScript:          nextCh.RequestScript,
+					ResponseScript:         nextCh.ResponseScript,
+					ErrorScript:            nextCh.ErrorScript,
+					QueryURL:               nextCh.QueryURL,
+					QueryMethod:            nextCh.QueryMethod,
+					QueryScript:            nextCh.QueryScript,
+					PoolKeyID:              poolKeyID,
+					PoolKeyValue:           poolKeyValue,
+					PoolKeyBaseURL:         poolKeyBaseURL,
+					Payload:                res.Payload,
+					PoolKeyCreatedUpstream: false,
+					RetryChannelIDs:        remaining,
 				}
 				data, _ := json.Marshal(retryJob)
 				subject := fmt.Sprintf("task.%s.%d", res.TaskType, nextChannelID)
