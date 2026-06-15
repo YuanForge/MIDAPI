@@ -2,6 +2,7 @@ package handler
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -13,6 +14,87 @@ import (
 	"github.com/gin-gonic/gin"
 	"xorm.io/xorm"
 )
+
+type tokenPriceMeta struct {
+	InputPricePer1MTokens  *int64 `json:"input_price_per_1m_tokens,omitempty"`
+	OutputPricePer1MTokens *int64 `json:"output_price_per_1m_tokens,omitempty"`
+}
+
+func configInt64Ptr(cfg model.JSON, key string) *int64 {
+	if cfg == nil {
+		return nil
+	}
+	raw, ok := cfg[key]
+	if !ok {
+		return nil
+	}
+	value, ok := numberToFloat64(raw)
+	if !ok || value < 0 {
+		return nil
+	}
+	rounded := int64(math.Round(value))
+	return &rounded
+}
+
+func resolveTokenPriceMeta(ch *model.Channel, userGroup string) tokenPriceMeta {
+	if ch == nil || ch.BillingType != "token" || ch.BillingConfig == nil {
+		return tokenPriceMeta{}
+	}
+
+	cfg := ch.BillingConfig
+	if userGroup != "" {
+		cfg = applyGroupPricingMap(map[string]interface{}(ch.BillingConfig), userGroup)
+	}
+
+	return tokenPriceMeta{
+		InputPricePer1MTokens:  configInt64Ptr(cfg, "input_price_per_1m_tokens"),
+		OutputPricePer1MTokens: configInt64Ptr(cfg, "output_price_per_1m_tokens"),
+	}
+}
+
+func resolveTokenPriceMetaValue(ch *model.Channel, userGroup string) (*int64, *int64) {
+	meta := resolveTokenPriceMeta(ch, userGroup)
+	return meta.InputPricePer1MTokens, meta.OutputPricePer1MTokens
+}
+
+func coalesceTokenPrice(stored *int64, fallback *int64) *int64 {
+	if stored != nil {
+		return stored
+	}
+	return fallback
+}
+
+func loadChannelPricingMap(channelIDs []int64) map[int64]model.Channel {
+	if len(channelIDs) == 0 {
+		return map[int64]model.Channel{}
+	}
+
+	var channels []model.Channel
+	if err := db.Engine.In("id", channelIDs).
+		Cols("id", "billing_type", "billing_config").
+		Find(&channels); err != nil {
+		return map[int64]model.Channel{}
+	}
+
+	channelMap := make(map[int64]model.Channel, len(channels))
+	for _, ch := range channels {
+		channelMap[ch.ID] = ch
+	}
+	return channelMap
+}
+
+func collectChannelIDs(logs []model.LLMLog) []int64 {
+	channelIDs := make([]int64, 0, len(logs))
+	seen := make(map[int64]bool, len(logs))
+	for _, l := range logs {
+		if l.ChannelID <= 0 || seen[l.ChannelID] {
+			continue
+		}
+		seen[l.ChannelID] = true
+		channelIDs = append(channelIDs, l.ChannelID)
+	}
+	return channelIDs
+}
 
 // GET /admin/llm-logs
 // Query params: user_id, channel_id, status, corr_id, model, start_at, end_at, page, page_size
@@ -234,6 +316,8 @@ func billingCorrIDFilter(logs []model.LLMLog) (string, []interface{}) {
 // GET /v1/llm-logs  (用户查自己的日志，不含 upstream_request 详情)
 func UserListLLMLogs(c *gin.Context) {
 	userID := c.MustGet("user_id").(int64)
+	userGroup, _ := c.Get("user_group")
+	groupName, _ := userGroup.(string)
 
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
@@ -301,13 +385,16 @@ func UserListLLMLogs(c *gin.Context) {
 	// 用户列表不返回 upstream_request / upstream_response / upstream_url 等上游信息
 	listSess := applyFilters()
 	defer listSess.Close()
-	err = listSess.Cols("id", "corr_id", "model", "is_stream",
+	err = listSess.Cols("id", "channel_id", "corr_id", "model",
+		"input_price_per_1m_tokens", "output_price_per_1m_tokens", "is_stream",
 		"upstream_status", "usage", "status", "error_msg", "created_at").
 		OrderBy("id DESC").Limit(pageSize, offset).Find(&logs)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败，请稍后重试"})
 		return
 	}
+
+	channelMap := loadChannelPricingMap(collectChannelIDs(logs))
 
 	// 查询每条日志对应的净扣费积分（hold/charge/settle 扣除 refund 后的实际消耗）
 	creditsMap := map[string]int64{}
@@ -332,13 +419,23 @@ func UserListLLMLogs(c *gin.Context) {
 	type logWithCredits struct {
 		model.LLMLog
 		CreditsCharged int64 `json:"credits_charged"`
+		tokenPriceMeta
 	}
 	result := make([]logWithCredits, len(logs))
 	for i, l := range logs {
 		if l.ErrorMsg != "" {
 			l.ErrorMsg = service.UserFacingErrorMessage(l.ErrorMsg)
 		}
-		result[i] = logWithCredits{LLMLog: l, CreditsCharged: creditsMap[l.CorrID]}
+		ch := channelMap[l.ChannelID]
+		fallbackPrice := resolveTokenPriceMeta(&ch, groupName)
+		result[i] = logWithCredits{
+			LLMLog:         l,
+			CreditsCharged: creditsMap[l.CorrID],
+			tokenPriceMeta: tokenPriceMeta{
+				InputPricePer1MTokens:  coalesceTokenPrice(l.InputPricePer1MTokens, fallbackPrice.InputPricePer1MTokens),
+				OutputPricePer1MTokens: coalesceTokenPrice(l.OutputPricePer1MTokens, fallbackPrice.OutputPricePer1MTokens),
+			},
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -352,6 +449,8 @@ func UserListLLMLogs(c *gin.Context) {
 // GET /v1/llm-logs/:id  （用户查自己某条日志的完整详情，只含用户可见字段）
 func UserGetLLMLog(c *gin.Context) {
 	userID := c.MustGet("user_id").(int64)
+	userGroup, _ := c.Get("user_group")
+	groupName, _ := userGroup.(string)
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "ID 格式错误"})
@@ -369,18 +468,23 @@ func UserGetLLMLog(c *gin.Context) {
 	}
 	// 只返回用户可见字段，不暴露上游路由、Key、请求头等内部信息
 	type userLogDetail struct {
-		ID             int64      `json:"id"`
-		CorrID         string     `json:"corr_id"`
-		Model          string     `json:"model"`
-		IsStream       bool       `json:"is_stream"`
-		ClientRequest  model.JSON `json:"client_request,omitempty"`  // 用户原始请求
-		ClientResponse model.JSON `json:"client_response,omitempty"` // 平台返回给用户的响应
-		Usage          model.JSON `json:"usage,omitempty"`
-		Status         string     `json:"status"`
-		ErrorMsg       string     `json:"error_msg,omitempty"`
-		CreatedAt      string     `json:"created_at"`
-		UpdatedAt      string     `json:"updated_at"`
+		ID                     int64      `json:"id"`
+		CorrID                 string     `json:"corr_id"`
+		Model                  string     `json:"model"`
+		IsStream               bool       `json:"is_stream"`
+		ClientRequest          model.JSON `json:"client_request,omitempty"`  // 用户原始请求
+		ClientResponse         model.JSON `json:"client_response,omitempty"` // 平台返回给用户的响应
+		Usage                  model.JSON `json:"usage,omitempty"`
+		Status                 string     `json:"status"`
+		ErrorMsg               string     `json:"error_msg,omitempty"`
+		CreatedAt              string     `json:"created_at"`
+		UpdatedAt              string     `json:"updated_at"`
+		InputPricePer1MTokens  *int64     `json:"input_price_per_1m_tokens,omitempty"`
+		OutputPricePer1MTokens *int64     `json:"output_price_per_1m_tokens,omitempty"`
 	}
+	channelMap := loadChannelPricingMap([]int64{log.ChannelID})
+	channel := channelMap[log.ChannelID]
+	fallbackPrice := resolveTokenPriceMeta(&channel, groupName)
 	c.JSON(http.StatusOK, userLogDetail{
 		ID:             log.ID,
 		CorrID:         log.CorrID,
@@ -396,7 +500,9 @@ func UserGetLLMLog(c *gin.Context) {
 			}
 			return service.UserFacingErrorMessage(log.ErrorMsg)
 		}(),
-		CreatedAt: log.CreatedAt.Format("2006-01-02 15:04:05"),
-		UpdatedAt: log.UpdatedAt.Format("2006-01-02 15:04:05"),
+		CreatedAt:              log.CreatedAt.Format("2006-01-02 15:04:05"),
+		UpdatedAt:              log.UpdatedAt.Format("2006-01-02 15:04:05"),
+		InputPricePer1MTokens:  coalesceTokenPrice(log.InputPricePer1MTokens, fallbackPrice.InputPricePer1MTokens),
+		OutputPricePer1MTokens: coalesceTokenPrice(log.OutputPricePer1MTokens, fallbackPrice.OutputPricePer1MTokens),
 	})
 }

@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"fanapi/internal/billing"
-	"fanapi/internal/db"
 	"fanapi/internal/model"
 	"fanapi/internal/service"
 
@@ -75,8 +74,7 @@ func llmSettle(c *gin.Context, ch *model.Channel, reqData, usageData map[string]
 				}
 			}
 		}
-		_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("status", "usage", "error_msg").
-			Update(&model.LLMLog{Status: "ok", Usage: model.JSON(usageData), ErrorMsg: ""})
+		enqueueLLMLogPatch(corrID, []string{"status", "usage", "error_msg"}, model.LLMLog{Status: "ok", Usage: model.JSON(usageData), ErrorMsg: ""})
 		return
 	}
 
@@ -85,8 +83,7 @@ func llmSettle(c *gin.Context, ch *model.Channel, reqData, usageData map[string]
 			mcRefunded := llmRefundCredits(c, userID, totalHold)
 			_ = service.WriteTx(ctx, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, "refund", totalHold, upstreamCostHold, mcRefunded, model.JSON{"reason": "no_output"})
 		}
-		_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("status").
-			Update(&model.LLMLog{Status: "refunded"})
+		enqueueLLMLogPatch(corrID, []string{"status"}, model.LLMLog{Status: "refunded"})
 		return
 	}
 	respData := map[string]interface{}{"usage": usageData}
@@ -162,8 +159,7 @@ func llmSettle(c *gin.Context, ch *model.Channel, reqData, usageData map[string]
 			}
 		}
 	}
-	_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("status", "usage", "error_msg").
-		Update(&model.LLMLog{Status: "ok", Usage: model.JSON(usageData), ErrorMsg: ""})
+	enqueueLLMLogPatch(corrID, []string{"status", "usage", "error_msg"}, model.LLMLog{Status: "ok", Usage: model.JSON(usageData), ErrorMsg: ""})
 }
 
 // llmRefundAndAbort 退款并终止请求（上游失败时调用）。
@@ -274,8 +270,7 @@ func llmRefundAndAbort(c *gin.Context, corrID string, userID, credits, upstreamC
 		_ = service.WriteTx(c.Request.Context(), userID, 0, 0, poolKeyIDVal, corrID, "refund", credits, upstreamCost, mcRefunded, model.JSON{"reason": "upstream_error"})
 	}
 	if corrID != "" {
-		_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("status", "upstream_status", "error_msg").
-			Update(&model.LLMLog{Status: "error", UpstreamStatus: upstreamStatus, ErrorMsg: errMsg})
+		enqueueLLMLogPatch(corrID, []string{"status", "upstream_status", "error_msg"}, model.LLMLog{Status: "error", UpstreamStatus: upstreamStatus, ErrorMsg: errMsg})
 	}
 	// 根据错误类型返回语义准确的 HTTP 状态码：
 	// - 上游超时（context deadline exceeded / Client.Timeout）→ 504 Gateway Timeout

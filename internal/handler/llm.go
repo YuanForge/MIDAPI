@@ -437,19 +437,18 @@ func appendPoolKeyID(ids []int64, id int64) []int64 {
 	return append(ids, id)
 }
 
-func persistLLMUpstreamHeaders(logID int64, sentHeaders map[string]string) {
+func persistLLMUpstreamHeaders(corrID string, sentHeaders map[string]string) {
 	if sentHeaders == nil {
 		return
 	}
 	go func() {
-		db.Engine.Where("id = ?", logID).Cols("upstream_headers").
-			Update(&model.LLMLog{UpstreamHeaders: model.JSON(func() map[string]interface{} {
-				m := make(map[string]interface{}, len(sentHeaders))
-				for k, v := range sentHeaders {
-					m[k] = v
-				}
-				return m
-			}())})
+		m := make(map[string]interface{}, len(sentHeaders))
+		for k, v := range sentHeaders {
+			m[k] = v
+		}
+		enqueueLLMLogPatch(corrID, []string{"upstream_headers"}, model.LLMLog{
+			UpstreamHeaders: model.JSON(m),
+		})
 	}()
 }
 
@@ -666,13 +665,16 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 	if upstreamMethod == "" {
 		upstreamMethod = "POST"
 	}
+	inputPricePer1M, outputPricePer1M := resolveTokenPriceMetaValue(ch, userGroup)
 	llmLog := &model.LLMLog{
-		UserID:    userID,
-		ChannelID: channelID,
-		APIKeyID:  apiKeyIDVal,
-		CorrID:    corrID,
-		Model:     modelName,
-		IsStream:  isStream,
+		UserID:                 userID,
+		ChannelID:              channelID,
+		APIKeyID:               apiKeyIDVal,
+		CorrID:                 corrID,
+		Model:                  modelName,
+		InputPricePer1MTokens:  inputPricePer1M,
+		OutputPricePer1MTokens: outputPricePer1M,
+		IsStream:               isStream,
 		Transport: func() string {
 			if isStream {
 				return "sse"
@@ -685,7 +687,7 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 		ClientRequest:   model.JSON(origReqData), // 用户原始请求（协议转换前）
 		Status:          "pending",
 	}
-	_, _ = db.Engine.Insert(llmLog)
+	enqueueLLMLogInsert(*llmLog)
 
 	// 6. 号池 Key 已在步骤1分配，直接发送上游请求
 	// 7. 发送上游请求
@@ -695,7 +697,7 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 	}
 	lastPoolKeyFromUpstreamCreate := false
 	sentHeaders, resp, err := sendLLMRequest(c, ch, mappedReq, poolKey, proto, resolvedModel, isStream, responsesOperation)
-	persistLLMUpstreamHeaders(llmLog.ID, sentHeaders)
+	persistLLMUpstreamHeaders(corrID, sentHeaders)
 
 	if err == nil && resp != nil {
 		// 401/403/429 视为当前号池 Key 失效或额度不可用：临时摘除该 Key，并在同池内换 Key 重试。
@@ -714,7 +716,7 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 			triedPoolKeyIDs = appendPoolKeyID(triedPoolKeyIDs, newKey.ID)
 			lastPoolKeyFromUpstreamCreate = syncResult.CreatedUpstream > 0
 			sentHeaders, resp, err = sendLLMRequest(c, ch, mappedReq, poolKey, proto, resolvedModel, isStream, responsesOperation)
-			persistLLMUpstreamHeaders(llmLog.ID, sentHeaders)
+			persistLLMUpstreamHeaders(corrID, sentHeaders)
 			if err != nil {
 				service.RecordChannelError(c.Request.Context(), channelID)
 				llmRefundAndAbort(c, corrID, userID, totalHold, upstreamCostHold, poolKeyIDVal, 0, "上游请求失败(重试): "+err.Error())
@@ -733,7 +735,7 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 			poolKeyIDVal = newKey.ID
 			triedPoolKeyIDs = appendPoolKeyID(triedPoolKeyIDs, newKey.ID)
 			sentHeaders, resp, err = sendLLMRequest(c, ch, mappedReq, poolKey, proto, resolvedModel, isStream, responsesOperation)
-			persistLLMUpstreamHeaders(llmLog.ID, sentHeaders)
+			persistLLMUpstreamHeaders(corrID, sentHeaders)
 		}
 	}
 
@@ -746,8 +748,7 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 				if totalHold > 0 {
 					mcRefunded := llmRefundCredits(c, userID, totalHold)
 					_ = service.WriteTx(c.Request.Context(), userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, "refund", totalHold, upstreamCostHold, mcRefunded, model.JSON{"reason": "channel_retry"})
-					_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("status", "error_msg").
-						Update(&model.LLMLog{Status: "error", ErrorMsg: "channel retry"})
+					enqueueLLMLogPatch(corrID, []string{"status", "error_msg"}, model.LLMLog{Status: "error", ErrorMsg: "channel retry"})
 				}
 				llmProxyWithChannel(c, nextCh, origReqData, userID, apiKeyIDVal, userGroup, triedIDs, stableChannels)
 				return
@@ -810,8 +811,7 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 					} else if poolKeyRetryExhausted {
 						retryMsg = fmt.Sprintf("channel retry: pool key returned %d", resp.StatusCode)
 					}
-					_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("status", "error_msg").
-						Update(&model.LLMLog{Status: "error", ErrorMsg: retryMsg})
+					enqueueLLMLogPatch(corrID, []string{"status", "error_msg"}, model.LLMLog{Status: "error", ErrorMsg: retryMsg})
 				}
 				llmProxyWithChannel(c, nextCh, origReqData, userID, apiKeyIDVal, userGroup, triedIDs, stableChannels)
 				return
@@ -874,8 +874,7 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 						if totalHold > 0 {
 							mcRefunded := llmRefundCredits(c, userID, totalHold)
 							_ = service.WriteTx(c.Request.Context(), userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, "refund", totalHold, upstreamCostHold, mcRefunded, model.JSON{"reason": "channel_retry"})
-							_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("status", "error_msg").
-								Update(&model.LLMLog{Status: "error", ErrorMsg: "channel retry: " + bizErr})
+							enqueueLLMLogPatch(corrID, []string{"status", "error_msg"}, model.LLMLog{Status: "error", ErrorMsg: "channel retry: " + bizErr})
 						}
 						llmProxyWithChannel(c, nextCh, origReqData, userID, apiKeyIDVal, userGroup, triedIDs, stableChannels)
 						return
@@ -910,12 +909,11 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 
 		var clientRespJSON map[string]interface{}
 		_ = json.Unmarshal(respBytes, &clientRespJSON)
-		_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("upstream_status", "upstream_response", "client_response").
-			Update(&model.LLMLog{
-				UpstreamStatus:   http.StatusOK,
-				UpstreamResponse: model.JSON(origRespJSON),
-				ClientResponse:   model.JSON(clientRespJSON),
-			})
+		enqueueLLMLogPatch(corrID, []string{"upstream_status", "upstream_response", "client_response"}, model.LLMLog{
+			UpstreamStatus:   http.StatusOK,
+			UpstreamResponse: model.JSON(origRespJSON),
+			ClientResponse:   model.JSON(clientRespJSON),
+		})
 
 		llmSettle(c, ch, origReqData, syncUsage, totalHold, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, userGroup)
 		return
@@ -955,8 +953,7 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 								if totalHold > 0 {
 									mcRefunded := llmRefundCredits(c, userID, totalHold)
 									_ = service.WriteTx(c.Request.Context(), userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, "refund", totalHold, upstreamCostHold, mcRefunded, model.JSON{"reason": "channel_retry"})
-									_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("status", "error_msg").
-										Update(&model.LLMLog{Status: "error", ErrorMsg: "channel retry: " + bizErr})
+									enqueueLLMLogPatch(corrID, []string{"status", "error_msg"}, model.LLMLog{Status: "error", ErrorMsg: "channel retry: " + bizErr})
 								}
 								llmProxyWithChannel(c, nextCh, origReqData, userID, apiKeyIDVal, userGroup, triedIDs, stableChannels)
 								return
@@ -986,8 +983,7 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 								if totalHold > 0 {
 									mcRefunded := llmRefundCredits(c, userID, totalHold)
 									_ = service.WriteTx(c.Request.Context(), userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, "refund", totalHold, upstreamCostHold, mcRefunded, model.JSON{"reason": "channel_retry"})
-									_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("status", "error_msg").
-										Update(&model.LLMLog{Status: "error", ErrorMsg: "channel retry: " + bizErr})
+									enqueueLLMLogPatch(corrID, []string{"status", "error_msg"}, model.LLMLog{Status: "error", ErrorMsg: "channel retry: " + bizErr})
 								}
 								llmProxyWithChannel(c, nextCh, origReqData, userID, apiKeyIDVal, userGroup, triedIDs, stableChannels)
 								return
@@ -1063,18 +1059,16 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 		return true
 	})
 
-	_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("upstream_status", "upstream_response", "client_response").
-		Update(&model.LLMLog{
-			UpstreamStatus:   http.StatusOK,
-			UpstreamResponse: model.JSON{"lines": rawSSELines},
-			ClientResponse:   buildStreamClientResponse(rawSSELines, proto),
-		})
+	enqueueLLMLogPatch(corrID, []string{"upstream_status", "upstream_response", "client_response"}, model.LLMLog{
+		UpstreamStatus:   http.StatusOK,
+		UpstreamResponse: model.JSON{"lines": rawSSELines},
+		ClientResponse:   buildStreamClientResponse(rawSSELines, proto),
+	})
 
 	if streamReadErr != nil {
 		service.RecordChannelError(c.Request.Context(), channelID)
 		log.Printf("[llm] stream read error corr_id=%s channel_id=%d err=%v", corrID, channelID, streamReadErr)
-		_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("status", "error_msg").
-			Update(&model.LLMLog{Status: "error", ErrorMsg: streamReadErr.Error()})
+		enqueueLLMLogPatch(corrID, []string{"status", "error_msg"}, model.LLMLog{Status: "error", ErrorMsg: streamReadErr.Error()})
 	}
 
 	llmSettle(c, ch, origReqData, usage.normalized(origReqData), totalHold, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, userGroup)

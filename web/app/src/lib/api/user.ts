@@ -1,5 +1,5 @@
 import { createHttpClient } from '@/lib/api/http'
-import { uploadAuthedImage, type UploadImageCategory } from '@/lib/api/upload'
+import { uploadAuthedImage, uploadAuthedVideo, type UploadImageCategory, type UploadVideoCategory } from '@/lib/api/upload'
 
 const http = createHttpClient('user')
 
@@ -102,6 +102,8 @@ export type UserLog = {
   created_at?: string
   updated_at?: string
   corr_id?: string
+  input_price_per_1m_tokens?: number
+  output_price_per_1m_tokens?: number
   /** 从 billing_transactions 聚合的净扣费积分，后端字段名 credits_charged */
   credits_charged?: number
   /** @deprecated 旧字段别名，兼容旧代码 */
@@ -243,6 +245,8 @@ export const userApi = {
   },
   uploadImage: (file: File, category: UploadImageCategory) =>
     uploadAuthedImage('user', file, category),
+  uploadVideo: (file: File, category: UploadVideoCategory) =>
+    uploadAuthedVideo('user', file, category),
   getModelCredits: () =>
     http.get<{ model_credits?: UserModelCredit[] }>('/user/model-credits'),
   listConversations: (size = 50) =>

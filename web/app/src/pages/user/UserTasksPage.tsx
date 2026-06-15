@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ListIcon } from 'lucide-react'
 
 import { DateRangeFilter } from '@/components/shared/DateRangeFilter'
@@ -31,13 +31,12 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { copyToClipboard } from '@/lib/clipboard'
-import { userApi, type UserTask } from '@/lib/api/user'
 import { useAsync } from '@/hooks/use-async'
+import { userApi, type UserTask } from '@/lib/api/user'
+import { copyToClipboard } from '@/lib/clipboard'
 
 function resolveStatus(row: UserTask): string {
   if (typeof row.status === 'string') return row.status
-  // TaskResult 用数字状态：0=pending,1=processing,2=done,-1=failed
   if (row.status === 0) return 'pending'
   if (row.status === 1) return 'processing'
   if (row.status === 2 || row.status === 200) return 'done'
@@ -46,9 +45,9 @@ function resolveStatus(row: UserTask): string {
 }
 
 function statusBadge(s: string) {
-  if (s === 'pending') return <Badge className="bg-yellow-500 hover:bg-yellow-500 text-white">排队中</Badge>
-  if (s === 'processing') return <Badge className="bg-blue-500 hover:bg-blue-500 text-white">处理中</Badge>
-  if (s === 'done') return <Badge className="bg-emerald-600 hover:bg-emerald-600 text-white">已完成</Badge>
+  if (s === 'pending') return <Badge className="bg-yellow-500 text-white hover:bg-yellow-500">排队中</Badge>
+  if (s === 'processing') return <Badge className="bg-blue-500 text-white hover:bg-blue-500">处理中</Badge>
+  if (s === 'done') return <Badge className="bg-emerald-600 text-white hover:bg-emerald-600">已完成</Badge>
   if (s === 'failed') return <Badge variant="destructive">失败</Badge>
   return <Badge variant="outline">{s}</Badge>
 }
@@ -81,6 +80,72 @@ function JsonBlock({ title, value }: { title: string; value: unknown }) {
   )
 }
 
+function splitLines(value: unknown) {
+  if (typeof value !== 'string') return []
+  return value
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+}
+
+function normalizeStringList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .flatMap((item) => {
+        if (typeof item === 'string') return [item.trim()]
+        if (item && typeof item === 'object' && typeof (item as { url?: unknown }).url === 'string') {
+          return [((item as { url?: string }).url ?? '').trim()]
+        }
+        return []
+      })
+      .filter(Boolean)
+  }
+  if (typeof value === 'string') {
+    return splitLines(value)
+  }
+  return []
+}
+
+function firstString(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
+}
+
+function collectResultVideoUrls(task: UserTask | null) {
+  if (!task) return []
+  const result = task.result ?? {}
+  const urls = [
+    task.url,
+    result.url,
+    ...(normalizeStringList(result.urls)),
+    ...(normalizeStringList(result.videos)),
+    ...(normalizeStringList(task.items)),
+    ...(normalizeStringList(result.items)),
+  ]
+  return Array.from(new Set(urls.filter((item): item is string => Boolean(item))))
+}
+
+function collectReferenceImages(task: UserTask | null) {
+  if (!task) return []
+  return Array.from(new Set(normalizeStringList(task.request?.refer_images)))
+}
+
+function collectReferenceVideos(task: UserTask | null) {
+  if (!task) return []
+  return Array.from(new Set(normalizeStringList(task.request?.refer_videos)))
+}
+
+function MediaSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="rounded-lg border p-4">
+      <p className="mb-3 text-sm font-semibold">{title}</p>
+      {children}
+    </div>
+  )
+}
+
 export function UserTasksPage() {
   const [page, setPage] = useState(1)
   const [filters, setFilters] = useState({ task_id: '', type: '', status: '' })
@@ -104,8 +169,12 @@ export function UserTasksPage() {
   const autoRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   function stopAutoRefresh() {
-    if (autoRefreshRef.current) { clearInterval(autoRefreshRef.current); autoRefreshRef.current = null }
+    if (autoRefreshRef.current) {
+      clearInterval(autoRefreshRef.current)
+      autoRefreshRef.current = null
+    }
   }
+
   useEffect(() => () => stopAutoRefresh(), [])
 
   async function openDetail(id: number) {
@@ -116,7 +185,6 @@ export function UserTasksPage() {
       const res = await userApi.getTask(id)
       const task: UserTask = (res as { task?: UserTask }).task ?? (res as UserTask)
       setDetail(task)
-      // 同步拉取账单明细（不影响主流程）
       userApi.getTaskBilling(id).then((b) => setBilling(b)).catch(() => null)
       const st = resolveStatus(task)
       if (st === 'pending' || st === 'processing') {
@@ -162,19 +230,18 @@ export function UserTasksPage() {
     setQueryParams((prev) => ({ ...prev, page: next }))
   }
 
+  const promptText = useMemo(() => firstString(detail?.request?.prompt, detail?.request?.input), [detail])
+  const referenceImages = useMemo(() => collectReferenceImages(detail), [detail])
+  const referenceVideos = useMemo(() => collectReferenceVideos(detail), [detail])
+  const resultVideoUrls = useMemo(() => collectResultVideoUrls(detail), [detail])
+
   return (
     <>
       <PageHeader
         eyebrow="Jobs"
         title="任务中心"
-        description="查看异步任务（图片、视频、音频等）的状态与结果详情。"
-        actions={
-          error ? (
-            <Button size="sm" variant="outline" onClick={reload}>
-              重试
-            </Button>
-          ) : null
-        }
+        description="查看异步任务的状态、计费和结果详情。"
+        actions={error ? <Button size="sm" variant="outline" onClick={reload}>重试</Button> : null}
       />
       {error ? (
         <Alert variant="destructive">
@@ -182,7 +249,6 @@ export function UserTasksPage() {
         </Alert>
       ) : null}
 
-      {/* 过滤栏 */}
       <Card>
         <CardContent className="flex flex-wrap items-end gap-3 py-4">
           <div className="space-y-1">
@@ -225,7 +291,10 @@ export function UserTasksPage() {
             startAt={startAt}
             endAt={endAt}
             label="时间范围"
-            onChange={({ startAt: s, endAt: e }) => { setStartAt(s); setEndAt(e) }}
+            onChange={({ startAt: s, endAt: e }) => {
+              setStartAt(s)
+              setEndAt(e)
+            }}
           />
           <Button onClick={doSearch}>查询</Button>
           <Button variant="outline" onClick={resetFilters}>重置</Button>
@@ -254,7 +323,7 @@ export function UserTasksPage() {
                   cols={7}
                   Icon={ListIcon}
                   title="还没有任务记录"
-                  description="发起图片/视频/音乐生成或异步调用后，任务会显示在这里。"
+                  description="发起图片、视频、音频或音乐生成后，任务会显示在这里。"
                 />
               ) : (
                 data.tasks.map((row, index) => {
@@ -274,16 +343,14 @@ export function UserTasksPage() {
                       </TableCell>
                       <TableCell className="text-right font-mono text-sm">
                         {row.credits_charged != null ? (
-                          <span className="text-red-500 font-semibold">
-                            -{(row.credits_charged / 1e6).toFixed(4)}
-                          </span>
+                          <span className="font-semibold text-red-500">-{(row.credits_charged / 1e6).toFixed(4)}</span>
                         ) : (
-                          <span className="text-muted-foreground">—</span>
+                          <span className="text-muted-foreground">-</span>
                         )}
                       </TableCell>
                       <TableCell>{statusBadge(st)}</TableCell>
                       <TableCell className="max-w-48 truncate text-xs text-red-500" title={errMsg}>
-                        {errMsg ?? <span className="text-muted-foreground">—</span>}
+                        {errMsg ?? <span className="text-muted-foreground">-</span>}
                       </TableCell>
                       <TableCell className="text-center">
                         {taskId != null ? (
@@ -311,9 +378,8 @@ export function UserTasksPage() {
         ) : null}
       </Card>
 
-      {/* 详情弹窗 */}
       <Dialog open={Boolean(detail)} onOpenChange={closeDetail}>
-        <DialogContent className="max-w-[872px] max-h-[80vh] overflow-y-auto">
+        <DialogContent className="max-h-[80vh] max-w-[960px] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>任务详情 #{detail?.id ?? detail?.task_id}</DialogTitle>
           </DialogHeader>
@@ -323,74 +389,124 @@ export function UserTasksPage() {
               <div className="h-32 w-full animate-pulse rounded-lg border bg-muted/40" />
               <div className="h-16 w-full animate-pulse rounded-lg border bg-muted/40" />
             </div>
-          ) : detail ? (() => {
-            const st = resolveStatus(detail)
-            const errMsg = detail.error_msg ?? detail.msg
-            return (
-              <div className="space-y-3">
-                <div className="grid grid-cols-2 gap-x-4 gap-y-1 rounded-lg border p-4 text-sm">
-                  <div><span className="text-muted-foreground">任务 ID：</span><strong>{detail.id ?? detail.task_id}</strong></div>
-                  <div><span className="text-muted-foreground">类型：</span>{typeLabel(detail.type ?? detail.task_type)}</div>
-                  <div className="col-span-2"><span className="text-muted-foreground">状态：</span>{statusBadge(st)}</div>
-                  <div className="col-span-2">
-                    <span className="text-muted-foreground">消耗积分：</span>
-                    {detail.credits_charged != null
-                      ? <span className="text-red-500 font-semibold">-{(detail.credits_charged / 1e6).toFixed(6)}</span>
-                      : '—'}
-                  </div>
-                  <div className="col-span-2">
-                    <span className="text-muted-foreground">创建时间：</span>
-                    {detail.created_at ? new Date(detail.created_at).toLocaleString('zh-CN') : '-'}
-                  </div>
-                  {detail.finished_at ? (
-                    <div className="col-span-2">
-                      <span className="text-muted-foreground">完成时间：</span>
-                      {new Date(detail.finished_at).toLocaleString('zh-CN')}
-                    </div>
-                  ) : null}
-                  {detail.upstream_task_id ? (
-                    <div className="col-span-2">
-                      <span className="text-muted-foreground">上游任务 ID：</span>
-                      <span className="font-mono text-xs">{detail.upstream_task_id}</span>
-                    </div>
-                  ) : null}
-                  {errMsg ? (
-                    <div className="col-span-2"><span className="text-muted-foreground">备注：</span><span className="text-red-500">{errMsg}</span></div>
-                  ) : null}
+          ) : detail ? (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-2 rounded-lg border p-4 text-sm">
+                <div><span className="text-muted-foreground">任务 ID：</span><strong>{detail.id ?? detail.task_id}</strong></div>
+                <div><span className="text-muted-foreground">类型：</span>{typeLabel(detail.type ?? detail.task_type)}</div>
+                <div className="col-span-2"><span className="text-muted-foreground">状态：</span>{statusBadge(resolveStatus(detail))}</div>
+                <div className="col-span-2">
+                  <span className="text-muted-foreground">消耗积分：</span>
+                  {detail.credits_charged != null
+                    ? <span className="font-semibold text-red-500">-{(detail.credits_charged / 1e6).toFixed(6)}</span>
+                    : '-'}
                 </div>
-                <JsonBlock title="请求参数" value={detail.request} />
-                <JsonBlock title="结果" value={detail.result} />
-                {billing?.transactions && billing.transactions.length > 0 ? (
-                  <div className="rounded-lg border">
-                    <div className="border-b px-3 py-2 text-xs font-semibold text-muted-foreground">账单明细</div>
-                    <table className="w-full text-xs">
-                      <thead>
-                        <tr className="border-b text-muted-foreground">
-                          <th className="px-3 py-1.5 text-left">类型</th>
-                          <th className="px-3 py-1.5 text-right">积分</th>
-                          <th className="px-3 py-1.5 text-right">余额后</th>
-                          <th className="px-3 py-1.5 text-right">时间</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {billing.transactions.map((tx, i) => (
-                          <tr key={tx.id ?? i} className="border-b last:border-0">
-                            <td className="px-3 py-1.5">{tx.type ?? '-'}</td>
-                            <td className="px-3 py-1.5 text-right font-mono">{tx.credits != null ? (tx.credits / 1e6).toFixed(6) : '-'}</td>
-                            <td className="px-3 py-1.5 text-right font-mono">{tx.balance_after != null ? (tx.balance_after / 1e6).toFixed(4) : '-'}</td>
-                            <td className="px-3 py-1.5 text-right text-muted-foreground">{tx.created_at ? new Date(tx.created_at).toLocaleString('zh-CN') : '-'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                <div className="col-span-2">
+                  <span className="text-muted-foreground">创建时间：</span>
+                  {detail.created_at ? new Date(detail.created_at).toLocaleString('zh-CN') : '-'}
+                </div>
+                {detail.finished_at ? (
+                  <div className="col-span-2">
+                    <span className="text-muted-foreground">完成时间：</span>
+                    {new Date(detail.finished_at).toLocaleString('zh-CN')}
+                  </div>
+                ) : null}
+                {detail.upstream_task_id ? (
+                  <div className="col-span-2">
+                    <span className="text-muted-foreground">上游任务 ID：</span>
+                    <span className="font-mono text-xs">{detail.upstream_task_id}</span>
+                  </div>
+                ) : null}
+                {(detail.error_msg ?? detail.msg) ? (
+                  <div className="col-span-2">
+                    <span className="text-muted-foreground">备注：</span>
+                    <span className="text-red-500">{detail.error_msg ?? detail.msg}</span>
                   </div>
                 ) : null}
               </div>
-            )
-          })() : null}
+
+              {promptText ? (
+                <MediaSection title="提示词">
+                  <div className="rounded-lg bg-muted/40 p-3 text-sm leading-6 whitespace-pre-wrap break-all">{promptText}</div>
+                </MediaSection>
+              ) : null}
+
+              {referenceImages.length > 0 ? (
+                <MediaSection title="参考图片">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {referenceImages.map((url) => (
+                      <div key={url} className="overflow-hidden rounded-xl border border-border/70 bg-muted/20">
+                        <img src={url} alt="reference" className="h-40 w-full object-cover" />
+                        <div className="truncate px-3 py-2 text-xs text-muted-foreground">{url}</div>
+                      </div>
+                    ))}
+                  </div>
+                </MediaSection>
+              ) : null}
+
+              {referenceVideos.length > 0 ? (
+                <MediaSection title="参考视频">
+                  <div className="grid gap-3">
+                    {referenceVideos.map((url) => (
+                      <div key={url} className="overflow-hidden rounded-xl border border-border/70 bg-muted/20">
+                        <video src={url} controls className="aspect-video w-full bg-black" />
+                        <div className="truncate px-3 py-2 text-xs text-muted-foreground">{url}</div>
+                      </div>
+                    ))}
+                  </div>
+                </MediaSection>
+              ) : null}
+
+              {resultVideoUrls.length > 0 ? (
+                <MediaSection title="结果视频">
+                  <div className="grid gap-3">
+                    {resultVideoUrls.map((url) => (
+                      <div key={url} className="overflow-hidden rounded-xl border border-border/70 bg-muted/20">
+                        <video src={url} controls className="aspect-video w-full bg-black" />
+                        <div className="flex items-center justify-between gap-2 px-3 py-2">
+                          <div className="truncate text-xs text-muted-foreground">{url}</div>
+                          <a href={url} target="_blank" rel="noopener noreferrer" className="shrink-0 text-xs text-primary underline">
+                            打开
+                          </a>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </MediaSection>
+              ) : null}
+
+              <JsonBlock title="请求参数" value={detail.request} />
+              <JsonBlock title="结果" value={detail.result} />
+
+              {billing?.transactions && billing.transactions.length > 0 ? (
+                <div className="rounded-lg border">
+                  <div className="border-b px-3 py-2 text-xs font-semibold text-muted-foreground">账单明细</div>
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b text-muted-foreground">
+                        <th className="px-3 py-1.5 text-left">类型</th>
+                        <th className="px-3 py-1.5 text-right">积分</th>
+                        <th className="px-3 py-1.5 text-right">余额后</th>
+                        <th className="px-3 py-1.5 text-right">时间</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {billing.transactions.map((tx, i) => (
+                        <tr key={tx.id ?? i} className="border-b last:border-0">
+                          <td className="px-3 py-1.5">{tx.type ?? '-'}</td>
+                          <td className="px-3 py-1.5 text-right font-mono">{tx.credits != null ? (tx.credits / 1e6).toFixed(6) : '-'}</td>
+                          <td className="px-3 py-1.5 text-right font-mono">{tx.balance_after != null ? (tx.balance_after / 1e6).toFixed(4) : '-'}</td>
+                          <td className="px-3 py-1.5 text-right text-muted-foreground">{tx.created_at ? new Date(tx.created_at).toLocaleString('zh-CN') : '-'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </DialogContent>
       </Dialog>
     </>
   )
 }
-

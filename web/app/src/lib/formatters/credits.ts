@@ -6,3 +6,8 @@ export function formatCredits(value: number | undefined | null) {
   if (abs >= 0.0001) return credits.toFixed(6)
   return credits.toFixed(8)
 }
+
+export function formatTokenPricePerMillion(value: number | undefined | null) {
+  if (value == null) return '-'
+  return `¥${formatCredits(value)} / 1M`
+}

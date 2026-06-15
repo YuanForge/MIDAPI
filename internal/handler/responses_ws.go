@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"fanapi/internal/billing"
-	"fanapi/internal/db"
 	"fanapi/internal/model"
 	"fanapi/internal/protocol"
 	"fanapi/internal/script"
@@ -254,19 +253,22 @@ func handleWSResponseCreate(c *gin.Context, conn *websocket.Conn, responseData m
 	}
 
 	// LLM 日志
+	inputPricePer1M, outputPricePer1M := resolveTokenPriceMetaValue(ch, userGroup)
 	llmLog := &model.LLMLog{
-		UserID:          userID,
-		ChannelID:       ch.ID,
-		APIKeyID:        apiKeyIDVal,
-		CorrID:          corrID,
-		Model:           resolvedModel,
-		IsStream:        true,
-		Transport:       "ws",
-		UpstreamRequest: model.JSON(openAIReq),
-		ClientRequest:   model.JSON(responseData),
-		Status:          "pending",
+		UserID:                 userID,
+		ChannelID:              ch.ID,
+		APIKeyID:               apiKeyIDVal,
+		CorrID:                 corrID,
+		Model:                  resolvedModel,
+		InputPricePer1MTokens:  inputPricePer1M,
+		OutputPricePer1MTokens: outputPricePer1M,
+		IsStream:               true,
+		Transport:              "ws",
+		UpstreamRequest:        model.JSON(openAIReq),
+		ClientRequest:          model.JSON(responseData),
+		Status:                 "pending",
 	}
-	_, _ = db.Engine.Insert(llmLog)
+	enqueueLLMLogInsert(*llmLog)
 
 	var usageForSettle map[string]interface{}
 	if useUpstreamWS {
@@ -277,17 +279,15 @@ func handleWSResponseCreate(c *gin.Context, conn *websocket.Conn, responseData m
 			if totalHold > 0 {
 				_ = service.WriteTx(c.Request.Context(), userID, ch.ID, apiKeyIDVal, poolKeyIDVal, corrID, "refund", totalHold, upstreamCostHold, modelCreditCharged, model.JSON{"reason": "upstream_error"})
 			}
-			_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("status", "error_msg").
-				Update(&model.LLMLog{Status: "error", ErrorMsg: wsErr.Error()})
+			enqueueLLMLogPatch(corrID, []string{"status", "error_msg"}, model.LLMLog{Status: "error", ErrorMsg: wsErr.Error()})
 			return wsErr
 		}
 		service.RecordChannelSuccess(c.Request.Context(), ch.ID)
-		_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("upstream_status", "upstream_response", "client_response").
-			Update(&model.LLMLog{
-				UpstreamStatus:   http.StatusOK,
-				UpstreamResponse: model.JSON{"messages": rawWSMessages},
-				ClientResponse:   clientResp,
-			})
+		enqueueLLMLogPatch(corrID, []string{"upstream_status", "upstream_response", "client_response"}, model.LLMLog{
+			UpstreamStatus:   http.StatusOK,
+			UpstreamResponse: model.JSON{"messages": rawWSMessages},
+			ClientResponse:   clientResp,
+		})
 		usageForSettle = usageWS
 	} else {
 		// 发送上游请求（强制流式）
@@ -298,8 +298,7 @@ func handleWSResponseCreate(c *gin.Context, conn *websocket.Conn, responseData m
 			if totalHold > 0 {
 				_ = service.WriteTx(c.Request.Context(), userID, ch.ID, apiKeyIDVal, poolKeyIDVal, corrID, "refund", totalHold, upstreamCostHold, modelCreditCharged, model.JSON{"reason": "upstream_error"})
 			}
-			_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("status", "error_msg").
-				Update(&model.LLMLog{Status: "error", ErrorMsg: reqErr.Error()})
+			enqueueLLMLogPatch(corrID, []string{"status", "error_msg"}, model.LLMLog{Status: "error", ErrorMsg: reqErr.Error()})
 			return reqErr
 		}
 		defer resp.Body.Close()
@@ -311,8 +310,7 @@ func handleWSResponseCreate(c *gin.Context, conn *websocket.Conn, responseData m
 			if totalHold > 0 {
 				_ = service.WriteTx(c.Request.Context(), userID, ch.ID, apiKeyIDVal, poolKeyIDVal, corrID, "refund", totalHold, upstreamCostHold, modelCreditCharged, model.JSON{"reason": "upstream_error"})
 			}
-			_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("status", "upstream_status", "error_msg").
-				Update(&model.LLMLog{Status: "error", UpstreamStatus: resp.StatusCode, ErrorMsg: string(bodyErr)})
+			enqueueLLMLogPatch(corrID, []string{"status", "upstream_status", "error_msg"}, model.LLMLog{Status: "error", UpstreamStatus: resp.StatusCode, ErrorMsg: string(bodyErr)})
 			return fmt.Errorf("上游返回 %d: %s", resp.StatusCode, string(bodyErr))
 		}
 
@@ -376,9 +374,7 @@ func handleWSResponseCreate(c *gin.Context, conn *websocket.Conn, responseData m
 					model.JSON{"reason": "upstream_stream_read_error"},
 				)
 			}
-			_, _ = db.Engine.Where("corr_id = ?", corrID).
-				Cols("status", "error_msg").
-				Update(&model.LLMLog{Status: "error", ErrorMsg: scanErr.Error()})
+			enqueueLLMLogPatch(corrID, []string{"status", "error_msg"}, model.LLMLog{Status: "error", ErrorMsg: scanErr.Error()})
 			return fmt.Errorf("读取上游流失败: %w", scanErr)
 		}
 
@@ -397,12 +393,11 @@ func handleWSResponseCreate(c *gin.Context, conn *websocket.Conn, responseData m
 		}
 
 		// 日志回写
-		_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("upstream_status", "upstream_response", "client_response").
-			Update(&model.LLMLog{
-				UpstreamStatus:   http.StatusOK,
-				UpstreamResponse: model.JSON{"lines": rawSSELines},
-				ClientResponse:   buildStreamClientResponse(rawSSELines, proto),
-			})
+		enqueueLLMLogPatch(corrID, []string{"upstream_status", "upstream_response", "client_response"}, model.LLMLog{
+			UpstreamStatus:   http.StatusOK,
+			UpstreamResponse: model.JSON{"lines": rawSSELines},
+			ClientResponse:   buildStreamClientResponse(rawSSELines, proto),
+		})
 		usageForSettle = usg.normalized(origReqData)
 	}
 

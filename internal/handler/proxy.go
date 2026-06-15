@@ -47,6 +47,21 @@ func expandReferImages(images []string, baseURL string) []string {
 	return expanded
 }
 
+func expandReferVideos(videos []string, baseURL string) []string {
+	if len(videos) == 0 {
+		return videos
+	}
+	expanded := make([]string, len(videos))
+	for i, video := range videos {
+		if strings.HasPrefix(video, "/") {
+			expanded[i] = baseURL + video
+		} else {
+			expanded[i] = video
+		}
+	}
+	return expanded
+}
+
 // bindImageRequest 将请求 body 解析为 ImageRequest。
 // 先按结构体绑定固定字段（做必填校验），再将原始 JSON 中其余字段写入 Extra，
 // Extra 字段经 ToMap() 合并后透传给 JS 映射脚本。
@@ -89,7 +104,7 @@ func bindVideoRequest(bodyBytes []byte) (*model.VideoRequest, error) {
 	}
 	var raw map[string]interface{}
 	_ = json.Unmarshal(bodyBytes, &raw)
-	known := map[string]bool{"model": true, "prompt": true, "size": true, "aspect_ratio": true, "duration": true, "refer_images": true}
+	known := map[string]bool{"model": true, "prompt": true, "size": true, "aspect_ratio": true, "duration": true, "refer_images": true, "refer_videos": true}
 	req.Extra = make(map[string]interface{})
 	for k, v := range raw {
 		if !known[k] {
@@ -405,6 +420,7 @@ func CreateVideoTask(c *gin.Context) {
 		return
 	}
 	req.ReferImages = expandReferImages(req.ReferImages, requestBaseURL(c))
+	req.ReferVideos = expandReferVideos(req.ReferVideos, requestBaseURL(c))
 	createTask(c, "video", req.ToMap())
 }
 

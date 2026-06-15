@@ -463,7 +463,7 @@ func buildUpstreamBody(job *model.TaskJob, payload, bodyPayload map[string]inter
 			}
 		} else {
 			for k, v := range bodyPayload {
-				if k == "refer_images" {
+				if k == "refer_images" || k == "refer_videos" {
 					continue
 				}
 				fields[k] = v
@@ -485,6 +485,10 @@ func buildUpstreamBody(job *model.TaskJob, payload, bodyPayload map[string]inter
 			files["image"] = refs[0]
 		} else if refs, ok := payload["refer_images"].([]string); ok && len(refs) > 0 {
 			files["image"] = refs[0]
+		} else if refs, ok := payload["refer_videos"].([]interface{}); ok && len(refs) > 0 {
+			files["video"] = refs[0]
+		} else if refs, ok := payload["refer_videos"].([]string); ok && len(refs) > 0 {
+			files["video"] = refs[0]
 		}
 
 		for field, raw := range files {

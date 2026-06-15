@@ -21,26 +21,69 @@ var uploadImageCategories = map[string]string{
 	"payment-qr":   "payment-qr",
 }
 
-func saveUploadedImage(c *gin.Context, category string) {
+var uploadVideoCategories = map[string]string{
+	"reference-video": "reference-videos",
+}
+
+type uploadRule struct {
+	maxSize         int64
+	contentPrefixes []string
+	defaultExt      string
+	emptyFileMsg    string
+	tooLargeMsg     string
+	invalidTypeMsg  string
+	saveFailedMsg   string
+}
+
+var imageUploadRule = uploadRule{
+	maxSize:         10 * 1024 * 1024,
+	contentPrefixes: []string{"image/"},
+	defaultExt:      ".png",
+	emptyFileMsg:    "请选择要上传的图片",
+	tooLargeMsg:     "图片不能超过 10MB",
+	invalidTypeMsg:  "仅支持上传图片文件",
+	saveFailedMsg:   "保存图片失败",
+}
+
+var videoUploadRule = uploadRule{
+	maxSize:         200 * 1024 * 1024,
+	contentPrefixes: []string{"video/"},
+	defaultExt:      ".mp4",
+	emptyFileMsg:    "请选择要上传的视频",
+	tooLargeMsg:     "视频不能超过 200MB",
+	invalidTypeMsg:  "仅支持上传视频文件",
+	saveFailedMsg:   "保存视频失败",
+}
+
+func hasAllowedContentType(contentType string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(contentType, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func saveUploadedMedia(c *gin.Context, category string, rule uploadRule) {
 	userID := c.MustGet("user_id").(int64)
 
 	file, err := c.FormFile("file")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择要上传的图片"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": rule.emptyFileMsg})
 		return
 	}
 	if file.Size <= 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "上传文件不能为空"})
 		return
 	}
-	if file.Size > 10*1024*1024 {
-		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "图片不能超过 10MB"})
+	if file.Size > rule.maxSize {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": rule.tooLargeMsg})
 		return
 	}
 
 	contentType := file.Header.Get("Content-Type")
-	if contentType == "" || !strings.HasPrefix(contentType, "image/") {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "仅支持上传图片文件"})
+	if contentType == "" || !hasAllowedContentType(contentType, rule.contentPrefixes) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": rule.invalidTypeMsg})
 		return
 	}
 
@@ -52,7 +95,7 @@ func saveUploadedImage(c *gin.Context, category string) {
 		}
 	}
 	if ext == "" {
-		ext = ".png"
+		ext = rule.defaultExt
 	}
 
 	subdir := filepath.Join("uploads", category)
@@ -69,17 +112,8 @@ func saveUploadedImage(c *gin.Context, category string) {
 	filename := fmt.Sprintf("%d_%d_%s%s", userID, time.Now().Unix(), hex.EncodeToString(randomBytes), ext)
 	fullPath := filepath.Join(subdir, filename)
 	if err := c.SaveUploadedFile(file, fullPath); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存图片失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": rule.saveFailedMsg})
 		return
-	}
-
-	scheme := c.GetHeader("X-Forwarded-Proto")
-	if scheme == "" {
-		if c.Request.TLS != nil {
-			scheme = "https"
-		} else {
-			scheme = "http"
-		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -87,7 +121,7 @@ func saveUploadedImage(c *gin.Context, category string) {
 	})
 }
 
-// UploadImage POST /upload/image 通用图片上传，返回可公开访问的 URL。
+// UploadImage POST /upload/image
 func UploadImage(c *gin.Context) {
 	categoryKey := c.PostForm("category")
 	category, ok := uploadImageCategories[categoryKey]
@@ -95,10 +129,21 @@ func UploadImage(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "不支持的上传分类"})
 		return
 	}
-	saveUploadedImage(c, category)
+	saveUploadedMedia(c, category, imageUploadRule)
 }
 
-// UploadReferenceImage POST /user/reference-images 兼容旧调用，默认上传到参考图目录。
+// UploadVideo POST /upload/video
+func UploadVideo(c *gin.Context) {
+	categoryKey := c.PostForm("category")
+	category, ok := uploadVideoCategories[categoryKey]
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "不支持的上传分类"})
+		return
+	}
+	saveUploadedMedia(c, category, videoUploadRule)
+}
+
+// UploadReferenceImage POST /user/reference-images
 func UploadReferenceImage(c *gin.Context) {
-	saveUploadedImage(c, uploadImageCategories["reference"])
+	saveUploadedMedia(c, uploadImageCategories["reference"], imageUploadRule)
 }

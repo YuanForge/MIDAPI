@@ -70,6 +70,7 @@ func main() {
 	// 启动异步任务轮询器（轮询 DB 中含 upstream_task_id 的 processing 状态任务）
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	handler.StartLLMLogBatchWriter(ctx)
 	taskresult.StartBatchWriter(ctx)
 	taskresult.StartPoller(ctx)
 
@@ -146,6 +147,7 @@ func main() {
 	authed.Use(middleware.Auth(&cfg.Server))
 	{
 		authed.POST("/upload/image", handler.UploadImage)
+		authed.POST("/upload/video", handler.UploadVideo)
 		user := authed.Group("/user")
 		{
 			user.GET("/profile", authH.GetProfile)
