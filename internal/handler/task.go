@@ -106,6 +106,8 @@ func GetTask(c *gin.Context) {
 	}
 
 	rewrite := getTaskResultURLRewrite()
+	c.JSON(http.StatusOK, buildTaskResult(task, rewrite))
+	return
 
 	switch task.Status {
 	case "pending":

@@ -419,7 +419,6 @@ func UserListLLMLogs(c *gin.Context) {
 	type logWithCredits struct {
 		model.LLMLog
 		CreditsCharged int64 `json:"credits_charged"`
-		tokenPriceMeta
 	}
 	result := make([]logWithCredits, len(logs))
 	for i, l := range logs {
@@ -428,13 +427,11 @@ func UserListLLMLogs(c *gin.Context) {
 		}
 		ch := channelMap[l.ChannelID]
 		fallbackPrice := resolveTokenPriceMeta(&ch, groupName)
+		l.InputPricePer1MTokens = coalesceTokenPrice(l.InputPricePer1MTokens, fallbackPrice.InputPricePer1MTokens)
+		l.OutputPricePer1MTokens = coalesceTokenPrice(l.OutputPricePer1MTokens, fallbackPrice.OutputPricePer1MTokens)
 		result[i] = logWithCredits{
 			LLMLog:         l,
 			CreditsCharged: creditsMap[l.CorrID],
-			tokenPriceMeta: tokenPriceMeta{
-				InputPricePer1MTokens:  coalesceTokenPrice(l.InputPricePer1MTokens, fallbackPrice.InputPricePer1MTokens),
-				OutputPricePer1MTokens: coalesceTokenPrice(l.OutputPricePer1MTokens, fallbackPrice.OutputPricePer1MTokens),
-			},
 		}
 	}
 

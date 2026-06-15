@@ -9,5 +9,5 @@ export function formatCredits(value: number | undefined | null) {
 
 export function formatTokenPricePerMillion(value: number | undefined | null) {
   if (value == null) return '-'
-  return `¥${formatCredits(value)} / 1M`
+  return `CNY ${formatCredits(value)} / 1M`
 }

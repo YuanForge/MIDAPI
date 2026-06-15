@@ -117,7 +117,7 @@ func saveUploadedMedia(c *gin.Context, category string, rule uploadRule) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"url": fmt.Sprintf("/uploads/%s/%s", category, filename),
+		"url": requestBaseURL(c) + fmt.Sprintf("/uploads/%s/%s", category, filename),
 	})
 }
 
