@@ -12,21 +12,20 @@ import (
 	"fanapi/internal/model"
 )
 
-// WriteTx 写入一条计费流水并同步更新用户的 DB 通用余额。
+// WriteTx 写入一条计费流水，并在需要时同步余额。
 // poolKeyID 为本次请求使用的号池 Key ID（0 表示未使用号池）。
 // cost 为支付给上游的进价成本（若暂不记录可传 0）。
 // modelCreditCharged 为本次从专属模型积分中扣除的数量（0 表示全部来自通用余额）。
 // DB 仅更新通用余额（users.balance），模型积分存储在 user_model_credits 表中。
 //
-// DB 余额权威策略：
-//   - "hold"    ：按 (credits - modelCreditCharged) 扣除 DB 通用余额
-//   - "settle"  ：同上，结算差额（Redis 已由 Charge+Refund 组合处理好）
-//   - "charge"  ：直接一次性扣费（图片/视频/音频），DB 同步扣款
-//   - "refund"  ：将通用余额部分加回 DB
-//   - "recharge"：充值加到 DB
+// 余额同步策略：
+//   - "hold"/"settle"/"charge"/"refund"：调用方必须先成功操作 Redis，WriteTx 只记录流水；
+//     PostgreSQL users.balance 由 Redis->DB 后台同步器按最终 Redis 余额写回。
+//   - "recharge"/"adjust"：先在 DB 原子更新余额，再增量同步到 Redis。
 func WriteTx(ctx context.Context, userID, channelID, apiKeyID, poolKeyID int64, corrID, txType string, credits, cost, modelCreditCharged int64, metrics model.JSON) error {
 	taskID := metricInt64(metrics, "task_id")
 	llmLogID := metricInt64(metrics, "llm_log_id")
+	skipRedisSync := metricBool(metrics, "skip_redis_sync")
 	tx := &model.BillingTransaction{
 		UserID:             userID,
 		ChannelID:          channelID,
@@ -49,36 +48,75 @@ func WriteTx(ctx context.Context, userID, channelID, apiKeyID, poolKeyID int64, 
 	}
 
 	var delta int64
+	redisPreApplied := false
 	switch txType {
 	case "charge", "settle", "hold":
 		delta = -generalCredits
+		redisPreApplied = true
 	case "refund", "recharge":
 		delta = generalCredits
+		redisPreApplied = txType == "refund"
+	case "adjust":
+		delta = credits
+	}
+	var balanceSyncJob *model.BalanceSyncJob
+
+	compensateRedis := func(reason string) {
+		if skipRedisSync || !redisPreApplied || delta == 0 {
+			return
+		}
+		if err := billing.ApplyBalanceDelta(context.Background(), userID, -delta); err != nil {
+			log.Printf("[billing] redis compensation failed user=%d type=%s corr_id=%s delta=%d reason=%s err=%v",
+				userID, txType, corrID, -delta, reason, err)
+			if markErr := billing.MarkBalanceDirty(context.Background(), userID); markErr != nil {
+				log.Printf("[billing] mark dirty after compensation failure failed user=%d type=%s corr_id=%s err=%v",
+					userID, txType, corrID, markErr)
+			}
+		}
 	}
 
 	// 将余额更新与流水插入包在同一事务，避免余额已改但流水缺失
 	sess := db.Engine.NewSession()
 	defer sess.Close()
 	if err := sess.Begin(); err != nil {
+		compensateRedis("begin")
 		return err
 	}
+	if !redisPreApplied && !skipRedisSync && delta != 0 {
+		if _, err := sess.Exec("SELECT pg_advisory_xact_lock($1, $2)", int64(20260617), userID); err != nil {
+			if rbErr := sess.Rollback(); rbErr != nil {
+				log.Printf("[billing] rollback failed: %v", rbErr)
+			}
+			return err
+		}
+	}
 
-	if delta != 0 {
-		// 单条 SQL 内原子地更新并返回新余额，用于审计日志。
+	if redisPreApplied {
+		if bal, found, err := billing.CachedBalance(ctx, userID); err == nil && found {
+			tx.BalanceAfter = bal
+		}
+	} else if delta != 0 {
+		// 未预先操作 Redis 的余额变更在 DB 内原子更新；消费/退款类由 Redis→PG 同步器负责写回 DB。
 		rows, err := sess.QueryString(
-			"UPDATE users SET balance = balance + $1 WHERE id = $2 RETURNING balance",
+			"UPDATE users SET balance = balance + $1 WHERE id = $2 AND balance + $1 >= 0 RETURNING balance",
 			delta, userID,
 		)
 		if err != nil {
 			if rbErr := sess.Rollback(); rbErr != nil {
 				log.Printf("[billing] rollback failed: %v", rbErr)
 			}
+			compensateRedis("update_error")
 			return err
 		}
-		if len(rows) > 0 {
-			if balStr, ok := rows[0]["balance"]; ok {
-				tx.BalanceAfter, _ = strconv.ParseInt(balStr, 10, 64)
+		if len(rows) == 0 {
+			if rbErr := sess.Rollback(); rbErr != nil {
+				log.Printf("[billing] rollback failed: %v", rbErr)
 			}
+			compensateRedis("update_no_rows")
+			return fmt.Errorf("用户余额不足或用户不存在")
+		}
+		if balStr, ok := rows[0]["balance"]; ok {
+			tx.BalanceAfter, _ = strconv.ParseInt(balStr, 10, 64)
 		}
 	}
 
@@ -86,19 +124,50 @@ func WriteTx(ctx context.Context, userID, channelID, apiKeyID, poolKeyID int64, 
 		if rbErr := sess.Rollback(); rbErr != nil {
 			log.Printf("[billing] rollback failed: %v", rbErr)
 		}
+		compensateRedis("insert_tx")
 		return err
+	}
+
+	if !skipRedisSync && !redisPreApplied && delta != 0 {
+		balanceSyncJob = &model.BalanceSyncJob{
+			UserID: userID,
+			Delta:  delta,
+			Reason: txType,
+			CorrID: corrID,
+			Status: "pending",
+		}
+		if _, err := sess.Insert(balanceSyncJob); err != nil {
+			if rbErr := sess.Rollback(); rbErr != nil {
+				log.Printf("[billing] rollback failed: %v", rbErr)
+			}
+			return err
+		}
 	}
 
 	if err := sess.Commit(); err != nil {
+		compensateRedis("commit")
 		return err
 	}
 
-	// 充值类交易（recharge）的 Redis 余额未被调用方提前同步，
-	// 必须在此重读 DB 后回写 Redis，避免 GetBalance 命中旧缓存。
-	// 其他类型（hold/charge/settle/refund）由调用方在前置 billing.Charge/Refund 时已操作 Redis。
-	if txType == "recharge" {
-		if _, err := billing.SyncBalanceToRedis(ctx, userID); err != nil {
-			log.Printf("recharge: sync balance to redis failed for user=%d: %v", userID, err)
+	// 未预先操作 Redis 的 DB 余额变更（如充值、手动调账）在事务成功后用增量同步到 Redis。
+	if !skipRedisSync && redisPreApplied {
+		if err := billing.MarkBalanceDirty(context.Background(), userID); err != nil {
+			log.Printf("[billing] mark dirty balance failed user=%d type=%s corr_id=%s err=%v",
+				userID, txType, corrID, err)
+		}
+	}
+	if !skipRedisSync && !redisPreApplied && delta != 0 {
+		if balanceSyncJob == nil {
+			log.Printf("[billing] missing balance sync job user=%d type=%s corr_id=%s delta=%d",
+				userID, txType, corrID, delta)
+			return nil
+		}
+		if err := billing.ApplyBalanceSyncJob(context.Background(), *balanceSyncJob); err != nil {
+			log.Printf("[billing] apply db delta to redis failed user=%d type=%s corr_id=%s delta=%d err=%v",
+				userID, txType, corrID, delta, err)
+		} else if _, err := db.Engine.ID(balanceSyncJob.ID).Cols("status").Update(&model.BalanceSyncJob{Status: "done"}); err != nil {
+			log.Printf("[billing] mark db->redis balance sync done failed user=%d type=%s corr_id=%s job_id=%d err=%v",
+				userID, txType, corrID, balanceSyncJob.ID, err)
 		}
 	}
 
@@ -144,6 +213,20 @@ func metricInt64(metrics model.JSON, key string) int64 {
 		return n
 	default:
 		return 0
+	}
+}
+
+func metricBool(metrics model.JSON, key string) bool {
+	if metrics == nil {
+		return false
+	}
+	switch v := metrics[key].(type) {
+	case bool:
+		return v
+	case string:
+		return v == "true" || v == "1"
+	default:
+		return false
 	}
 }
 
@@ -256,6 +339,14 @@ func getVendorCommission(_ context.Context, vendorID int64) float64 {
 
 // GetBalance 从 DB 返回用户的当前余额。
 func GetBalance(ctx context.Context, userID int64) (int64, error) {
+	if balance, err := billing.GetBalance(ctx, userID); err == nil {
+		return balance, nil
+	}
+	return GetDBBalance(ctx, userID)
+}
+
+// GetDBBalance 从 PostgreSQL 返回用户的当前余额快照。
+func GetDBBalance(ctx context.Context, userID int64) (int64, error) {
 	user := &model.User{}
 	found, err := db.Engine.Where("id = ?", userID).Cols("balance").Get(user)
 	if err != nil {

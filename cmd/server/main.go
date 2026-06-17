@@ -60,7 +60,7 @@ func main() {
 		log.Fatalf("nats ensure stream: %v", err)
 	}
 
-	_ = billing.SyncBalanceToRedis // 预留：可在启动时手动同步余额到 Redis
+	_ = billing.SyncBalanceToRedis // Redis 余额缓存未命中时按用户从 DB 回填；存量 Redis→DB 对账请用管理接口。
 
 	// 启动结果处理器：订阅 RESULTS 流，写入 DB 并完成计费结算
 	if err := taskresult.StartResultProcessor(cfg.Worker); err != nil {
@@ -70,6 +70,7 @@ func main() {
 	// 启动异步任务轮询器（轮询 DB 中含 upstream_task_id 的 processing 状态任务）
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	billing.StartBalanceSyncer(ctx)
 	handler.StartLLMLogBatchWriter(ctx)
 	taskresult.StartBatchWriter(ctx)
 	taskresult.StartPoller(ctx)
@@ -193,7 +194,6 @@ func main() {
 			admin.GET("/key-pools/:id/keys", handler.ListPoolKeys)
 			admin.POST("/key-pools/:id/keys", handler.AddPoolKey)
 			admin.POST("/key-pools/:id/keys/import", handler.ImportPoolKeys)
-			admin.POST("/key-pools/:id/sync-upstream", handler.SyncKeyPoolFromUpstream)
 			admin.GET("/key-pools/:id/channels", handler.GetKeyPoolChannels)
 			admin.DELETE("/pool-keys/:id", handler.RemovePoolKey)
 			admin.PATCH("/pool-keys/:id", handler.UpdatePoolKey)
@@ -271,6 +271,7 @@ func main() {
 			// 账单聚合 + 手动调账
 			admin.GET("/transactions/aggregate", handler.GetTransactionAggregate)
 			admin.POST("/transactions/adjust", handler.AdjustTransaction)
+			admin.POST("/transactions/sync-user-balance", handler.SyncUserBalanceFromRedis)
 
 			// 卡密批次
 			admin.GET("/cards/batches", handler.ListCardBatches)

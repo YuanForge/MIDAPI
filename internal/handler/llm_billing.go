@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -54,18 +56,28 @@ func llmSettle(c *gin.Context, ch *model.Channel, reqData, usageData map[string]
 					costPerImage, _, _ := billing.CalcForUser(ch, singleReq, userGroup)
 					delta := imgCount - preCount
 					if delta > 0 {
-						mcCharged := llmChargeExtra(c, userID, costPerImage*delta)
-						_ = service.WriteTx(ctx, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, "settle",
-							costPerImage*delta, 0, mcCharged, model.JSON{
+						extraCost := costPerImage * delta
+						mcCharged, generalCharged, chargeErr := llmChargeExtra(c, userID, extraCost)
+						charged := mcCharged + generalCharged
+						if charged > 0 {
+							metrics := model.JSON{
 								"reason":      "image_count_adjust",
 								"image_count": imgCount,
 								"pre_count":   preCount,
-							})
+							}
+							if chargeErr != nil || charged < extraCost {
+								metrics["partial"] = true
+								metrics["charge_error"] = fmt.Sprint(chargeErr)
+								metrics["attempted_cost"] = extraCost
+							}
+							recordLLMChargeTx(ctx, c, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID,
+								"settle", charged, 0, mcCharged, metrics)
+						}
 					} else {
 						refundAmt := costPerImage * (-delta)
-						mcRefunded := llmRefundCredits(c, userID, refundAmt)
-						_ = service.WriteTx(ctx, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, "refund",
-							refundAmt, 0, mcRefunded, model.JSON{
+						refunded, mcRefunded := llmRefundCredits(c, userID, refundAmt)
+						recordLLMRefundTx(ctx, c, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID,
+							refunded, 0, mcRefunded, model.JSON{
 								"reason":      "image_count_adjust",
 								"image_count": imgCount,
 								"pre_count":   preCount,
@@ -80,8 +92,8 @@ func llmSettle(c *gin.Context, ch *model.Channel, reqData, usageData map[string]
 
 	if usageData == nil {
 		if totalHold > 0 {
-			mcRefunded := llmRefundCredits(c, userID, totalHold)
-			_ = service.WriteTx(ctx, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, "refund", totalHold, upstreamCostHold, mcRefunded, model.JSON{"reason": "no_output"})
+			refunded, mcRefunded := llmRefundCredits(c, userID, totalHold)
+			recordLLMRefundTx(ctx, c, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, refunded, scaleRefundCost(upstreamCostHold, refunded, totalHold), mcRefunded, model.JSON{"reason": "no_output"})
 		}
 		enqueueLLMLogPatch(corrID, []string{"status"}, model.LLMLog{Status: "refunded"})
 		return
@@ -102,12 +114,12 @@ func llmSettle(c *gin.Context, ch *model.Channel, reqData, usageData map[string]
 			if outputCost < 0 {
 				// 实际费用低于预扣：退还多扣部分（常见于 Prompt Cache 命中率较高的场景）
 				refundAmt := -outputCost
-				mcRefunded := llmRefundCredits(c, userID, refundAmt)
+				refunded, mcRefunded := llmRefundCredits(c, userID, refundAmt)
 				upstreamRefund := int64(0)
 				if outputUpstreamCost < 0 {
 					upstreamRefund = -outputUpstreamCost
 				}
-				_ = service.WriteTx(ctx, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, "refund", refundAmt, upstreamRefund, mcRefunded, model.JSON{
+				recordLLMRefundTx(ctx, c, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, refunded, scaleRefundCost(upstreamRefund, refunded, refundAmt), mcRefunded, model.JSON{
 					"actual_cost": actualCost,
 					"held":        totalHold,
 					"usage":       usageData,
@@ -115,18 +127,27 @@ func llmSettle(c *gin.Context, ch *model.Channel, reqData, usageData map[string]
 				})
 			} else {
 				mcCharged := int64(0)
+				generalCharged := int64(0)
+				var chargeErr error
 				if outputCost > 0 {
-					mcCharged = llmChargeExtra(c, userID, outputCost)
+					mcCharged, generalCharged, chargeErr = llmChargeExtra(c, userID, outputCost)
 				}
+				charged := mcCharged + generalCharged
 				upstreamSettle := outputUpstreamCost
 				if upstreamSettle < 0 {
 					upstreamSettle = 0
 				}
-				_ = service.WriteTx(ctx, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, "settle", outputCost, upstreamSettle, mcCharged, model.JSON{
+				metrics := model.JSON{
 					"actual_cost": actualCost,
 					"held":        totalHold,
 					"usage":       usageData,
-				})
+				}
+				if chargeErr != nil || charged < outputCost {
+					metrics["partial"] = true
+					metrics["charge_error"] = fmt.Sprint(chargeErr)
+					metrics["attempted_cost"] = outputCost
+				}
+				recordLLMChargeTx(ctx, c, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, "settle", charged, upstreamSettle, mcCharged, metrics)
 			}
 		} else {
 			// input_from_response=true 或非 token 类型：预扣为估算，结算修正差额。
@@ -134,28 +155,38 @@ func llmSettle(c *gin.Context, ch *model.Channel, reqData, usageData map[string]
 			delta := totalHold - actualCost
 			if delta > 0 {
 				// 实际费用低于预估：退还多扣部分
-				mcRefunded := llmRefundCredits(c, userID, delta)
+				refunded, mcRefunded := llmRefundCredits(c, userID, delta)
 				upstreamDelta := upstreamCostHold - actualUpstreamCost
 				if upstreamDelta < 0 {
 					upstreamDelta = 0
 				}
-				_ = service.WriteTx(ctx, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, "refund", delta, upstreamDelta, mcRefunded, model.JSON{
+				recordLLMRefundTx(ctx, c, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, refunded, scaleRefundCost(upstreamDelta, refunded, delta), mcRefunded, model.JSON{
 					"actual_cost": actualCost,
 					"held":        totalHold,
 					"usage":       usageData,
 				})
 			} else if delta < 0 {
 				// 实际费用高于预估：补扣差额
-				mcCharged := llmChargeExtra(c, userID, -delta)
+				extraCost := -delta
+				mcCharged, generalCharged, chargeErr := llmChargeExtra(c, userID, extraCost)
+				charged := mcCharged + generalCharged
 				upstreamExtra := actualUpstreamCost - upstreamCostHold
 				if upstreamExtra < 0 {
 					upstreamExtra = 0
 				}
-				_ = service.WriteTx(ctx, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, "settle", -delta, upstreamExtra, mcCharged, model.JSON{
+				metrics := model.JSON{
 					"actual_cost": actualCost,
 					"held":        totalHold,
 					"usage":       usageData,
-				})
+				}
+				if chargeErr != nil || charged < extraCost {
+					metrics["partial"] = true
+					metrics["charge_error"] = fmt.Sprint(chargeErr)
+					metrics["attempted_cost"] = extraCost
+				}
+				if charged > 0 {
+					recordLLMChargeTx(ctx, c, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, "settle", charged, upstreamExtra, mcCharged, metrics)
+				}
 			}
 		}
 	}
@@ -169,23 +200,31 @@ func llmSettle(c *gin.Context, ch *model.Channel, reqData, usageData map[string]
 
 // llmChargeExtra 结算补扣：优先消耗专属模型积分，不足部分再扣通用余额。
 // 同步更新 gin context 中记录的已扣款数量，保证后续退款计算正确。
-// 返回从专属模型积分中扣除的数量，供 WriteTx 记录。
-func llmChargeExtra(c *gin.Context, userID, amount int64) int64 {
+// 返回从专属模型积分、通用余额中实际扣除的数量，供 WriteTx 记录。
+func llmChargeExtra(c *gin.Context, userID, amount int64) (modelExtraCharged, generalExtraCharged int64, err error) {
 	if amount <= 0 {
-		return 0
+		return 0, 0, nil
 	}
 	ctx := c.Request.Context()
 
-	modelExtraCharged := int64(0)
 	if rk, ok := c.Get("model_credit_routing_key"); ok {
 		if routingKey, ok := rk.(string); ok && routingKey != "" {
 			modelExtraCharged, _ = billing.ChargeModelCredit(ctx, userID, routingKey, amount)
 		}
 	}
 
-	generalExtraCharged := amount - modelExtraCharged
+	generalExtraCharged = amount - modelExtraCharged
 	if generalExtraCharged > 0 {
-		_ = billing.Charge(ctx, userID, generalExtraCharged)
+		if chargeErr := billing.Charge(ctx, userID, generalExtraCharged); chargeErr != nil {
+			if modelExtraCharged > 0 {
+				if rk, ok := c.Get("model_credit_routing_key"); ok {
+					if routingKey, ok := rk.(string); ok && routingKey != "" {
+						_ = billing.RefundModelCredit(ctx, userID, routingKey, modelExtraCharged)
+					}
+				}
+			}
+			return 0, 0, chargeErr
+		}
 	}
 
 	// 更新 context 中的累计扣款记录，供后续退款使用
@@ -207,14 +246,14 @@ func llmChargeExtra(c *gin.Context, userID, amount int64) int64 {
 		}
 		c.Set("model_credit_general_charged", gc+generalExtraCharged)
 	}
-	return modelExtraCharged
+	return modelExtraCharged, generalExtraCharged, nil
 }
 
 // llmRefundCredits 退款：优先退通用余额，再退专属模型积分（与扣款顺序相反）。
-// 返回从专属模型积分中退还的数量，供 WriteTx 记录。
-func llmRefundCredits(c *gin.Context, userID, amount int64) int64 {
+// 返回实际退款总额和其中的专属模型积分数量，供 WriteTx 记录。
+func llmRefundCredits(c *gin.Context, userID, amount int64) (refunded, modelRefunded int64) {
 	if amount <= 0 {
-		return 0
+		return 0, 0
 	}
 	ctx := c.Request.Context()
 
@@ -246,18 +285,117 @@ func llmRefundCredits(c *gin.Context, userID, amount int64) int64 {
 	}
 
 	if generalRefund > 0 {
-		_ = billing.Refund(ctx, userID, generalRefund)
-		c.Set("model_credit_general_charged", generalCharged-generalRefund)
+		if err := billing.Refund(ctx, userID, generalRefund); err != nil {
+			log.Printf("[llm-billing] refund general balance failed user_id=%d credits=%d err=%v", userID, generalRefund, err)
+		} else {
+			refunded += generalRefund
+			c.Set("model_credit_general_charged", generalCharged-generalRefund)
+		}
 	}
 	if modelRefund > 0 {
 		if rk, ok := c.Get("model_credit_routing_key"); ok {
 			if routingKey, ok := rk.(string); ok && routingKey != "" {
-				_ = billing.RefundModelCredit(ctx, userID, routingKey, modelRefund)
-				c.Set("model_credit_charged", modelCharged-modelRefund)
+				if err := billing.RefundModelCredit(ctx, userID, routingKey, modelRefund); err != nil {
+					log.Printf("[llm-billing] refund model credit failed user_id=%d routing_key=%s credits=%d err=%v", userID, routingKey, modelRefund, err)
+				} else {
+					refunded += modelRefund
+					modelRefunded = modelRefund
+					c.Set("model_credit_charged", modelCharged-modelRefund)
+				}
 			}
 		}
 	}
-	return modelRefund
+	return refunded, modelRefunded
+}
+
+func recordLLMChargeTx(ctx context.Context, c *gin.Context, userID, channelID, apiKeyIDVal, poolKeyIDVal int64, corrID, txType string, credits, upstreamCost, modelCharged int64, metrics model.JSON) {
+	if credits <= 0 {
+		return
+	}
+	if err := service.WriteTx(ctx, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, txType, credits, upstreamCost, modelCharged, metrics); err != nil {
+		log.Printf("[llm-billing] write %s tx failed user_id=%d corr_id=%s credits=%d model_credit=%d err=%v",
+			txType, userID, corrID, credits, modelCharged, err)
+		revertLLMCharge(ctx, c, userID, credits, modelCharged)
+	}
+}
+
+func recordLLMRefundTx(ctx context.Context, c *gin.Context, userID, channelID, apiKeyIDVal, poolKeyIDVal int64, corrID string, credits, upstreamCost, modelRefunded int64, metrics model.JSON) {
+	if credits <= 0 {
+		return
+	}
+	if err := service.WriteTx(ctx, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, "refund", credits, upstreamCost, modelRefunded, metrics); err != nil {
+		log.Printf("[llm-billing] write refund tx failed user_id=%d corr_id=%s credits=%d model_credit=%d err=%v",
+			userID, corrID, credits, modelRefunded, err)
+		revertLLMRefund(ctx, c, userID, credits, modelRefunded)
+	}
+}
+
+func scaleRefundCost(cost, refunded, requested int64) int64 {
+	if cost <= 0 || refunded <= 0 || requested <= 0 || refunded >= requested {
+		if refunded <= 0 {
+			return 0
+		}
+		return cost
+	}
+	return cost * refunded / requested
+}
+
+func revertLLMCharge(ctx context.Context, c *gin.Context, userID, credits, modelCharged int64) {
+	generalCharged := credits - modelCharged
+	if generalCharged > 0 {
+		// WriteTx already compensates the Redis general balance for failed pre-applied charges.
+		adjustContextCounter(c, "model_credit_general_charged", -generalCharged)
+	}
+	if modelCharged > 0 {
+		if routingKey := getLLMRoutingKey(c); routingKey != "" {
+			if err := billing.RefundModelCredit(ctx, userID, routingKey, modelCharged); err != nil {
+				log.Printf("[llm-billing] revert model charge failed user_id=%d routing_key=%s credits=%d err=%v", userID, routingKey, modelCharged, err)
+			}
+			adjustContextCounter(c, "model_credit_charged", -modelCharged)
+		}
+	}
+}
+
+func revertLLMRefund(ctx context.Context, c *gin.Context, userID, credits, modelRefunded int64) {
+	generalRefunded := credits - modelRefunded
+	if generalRefunded > 0 {
+		// WriteTx already compensates the Redis general balance for failed pre-applied refunds.
+		adjustContextCounter(c, "model_credit_general_charged", generalRefunded)
+	}
+	if modelRefunded > 0 {
+		if routingKey := getLLMRoutingKey(c); routingKey != "" {
+			if charged, err := billing.ChargeModelCredit(ctx, userID, routingKey, modelRefunded); err != nil {
+				log.Printf("[llm-billing] revert model refund failed user_id=%d routing_key=%s credits=%d err=%v", userID, routingKey, modelRefunded, err)
+			} else if charged != modelRefunded {
+				log.Printf("[llm-billing] revert model refund partial user_id=%d routing_key=%s expected=%d charged=%d", userID, routingKey, modelRefunded, charged)
+			} else {
+				adjustContextCounter(c, "model_credit_charged", modelRefunded)
+			}
+		}
+	}
+}
+
+func getLLMRoutingKey(c *gin.Context) string {
+	if rk, ok := c.Get("model_credit_routing_key"); ok {
+		if routingKey, ok := rk.(string); ok {
+			return routingKey
+		}
+	}
+	return ""
+}
+
+func adjustContextCounter(c *gin.Context, key string, delta int64) {
+	current := int64(0)
+	if v, ok := c.Get(key); ok {
+		if val, ok := v.(int64); ok {
+			current = val
+		}
+	}
+	next := current + delta
+	if next < 0 {
+		next = 0
+	}
+	c.Set(key, next)
 }
 
 func llmRefundAndAbort(c *gin.Context, corrID string, userID, credits, upstreamCost, poolKeyIDVal int64, upstreamStatus int, errMsg string) {
@@ -266,8 +404,8 @@ func llmRefundAndAbort(c *gin.Context, corrID string, userID, credits, upstreamC
 		log.Printf("[llm] request %s failed: %s", corrID, errMsg)
 	}
 	if credits > 0 {
-		mcRefunded := llmRefundCredits(c, userID, credits)
-		_ = service.WriteTx(c.Request.Context(), userID, 0, 0, poolKeyIDVal, corrID, "refund", credits, upstreamCost, mcRefunded, model.JSON{"reason": "upstream_error"})
+		refunded, mcRefunded := llmRefundCredits(c, userID, credits)
+		recordLLMRefundTx(c.Request.Context(), c, userID, 0, 0, poolKeyIDVal, corrID, refunded, scaleRefundCost(upstreamCost, refunded, credits), mcRefunded, model.JSON{"reason": "upstream_error"})
 	}
 	if corrID != "" {
 		enqueueLLMLogPatch(corrID, []string{"status", "upstream_status", "error_msg"}, model.LLMLog{Status: "error", UpstreamStatus: upstreamStatus, ErrorMsg: errMsg})

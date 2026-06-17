@@ -277,18 +277,6 @@ export type AdminPoolKey = {
   balance?: number | null
 }
 
-export type AdminKeyPoolSyncResult = {
-  pool_id?: number
-  platform_id?: number
-  group?: string
-  listed?: number
-  imported?: number
-  reactivated?: number
-  skipped?: number
-  created_upstream?: number
-  skipped_by_lock?: boolean
-}
-
 export type AdminOcpcPlatform = {
   id?: number
   platform?: string
@@ -660,8 +648,6 @@ export const adminApi = {
     http.post<Record<string, unknown>>(`/admin/key-pools/${poolId}/keys`, payload),
   importPoolKeys: (poolId: number, keys: string[]) =>
     http.post<{ imported: number; skipped: number }>(`/admin/key-pools/${poolId}/keys/import`, { keys }),
-  syncKeyPoolFromUpstream: (poolId: number) =>
-    http.post<AdminKeyPoolSyncResult>(`/admin/key-pools/${poolId}/sync-upstream`, {}),
   getKeyPoolChannels: (id: number) =>
     http.get<{ channels?: AdminChannel[] }>(`/admin/key-pools/${id}/channels`),
   removePoolKey: (id: number) =>

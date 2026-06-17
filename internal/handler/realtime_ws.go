@@ -184,12 +184,18 @@ func RealtimeWSProxy(c *gin.Context) {
 
 	corrID := uuid.New().String()
 	if totalHold > 0 {
-		_ = service.WriteTx(c.Request.Context(), userID, ch.ID, apiKeyIDVal, poolKeyIDVal, corrID, "hold", totalHold, upstreamCostHold, modelCreditCharged, model.JSON{
+		if err := service.WriteTx(c.Request.Context(), userID, ch.ID, apiKeyIDVal, poolKeyIDVal, corrID, "hold", totalHold, upstreamCostHold, modelCreditCharged, model.JSON{
 			"input_hold":  inputHold,
 			"output_hold": outputHold,
 			"user_group":  userGroup,
 			"via":         "realtime_ws",
-		})
+		}); err != nil {
+			if modelCreditCharged > 0 {
+				_ = billing.RefundModelCredit(c.Request.Context(), userID, routingModel, modelCreditCharged)
+			}
+			_ = writeWSError(clientConn, "billing_error", "计费流水写入失败，请稍后重试")
+			return
+		}
 	}
 
 	inputPricePer1M, outputPricePer1M := resolveTokenPriceMetaValue(ch, userGroup)
@@ -217,8 +223,8 @@ func RealtimeWSProxy(c *gin.Context) {
 	if err != nil {
 		service.RecordChannelError(c.Request.Context(), ch.ID)
 		if totalHold > 0 {
-			mcRefunded := llmRefundCredits(c, userID, totalHold)
-			_ = service.WriteTx(c.Request.Context(), userID, ch.ID, apiKeyIDVal, poolKeyIDVal, corrID, "refund", totalHold, upstreamCostHold, mcRefunded, model.JSON{"reason": "realtime_ws_error"})
+			refunded, mcRefunded := llmRefundCredits(c, userID, totalHold)
+			recordLLMRefundTx(c.Request.Context(), c, userID, ch.ID, apiKeyIDVal, poolKeyIDVal, corrID, refunded, scaleRefundCost(upstreamCostHold, refunded, totalHold), mcRefunded, model.JSON{"reason": "realtime_ws_error"})
 		}
 		enqueueLLMLogPatch(corrID, []string{"status", "error_msg", "upstream_response", "client_response"}, model.LLMLog{
 			Status:           "error",

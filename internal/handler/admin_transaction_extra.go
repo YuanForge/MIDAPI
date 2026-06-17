@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"fanapi/internal/billing"
 	"fanapi/internal/db"
 	"fanapi/internal/model"
+	"fanapi/internal/service"
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"net/http"
@@ -114,47 +116,68 @@ func AdjustTransaction(c *gin.Context) {
 		req.Type = "adjust"
 	}
 
-	engine := db.Engine
-	sess := engine.NewSession()
-	defer sess.Close()
-	if err := sess.Begin(); err != nil {
+	if err := service.WriteTx(c.Request.Context(), req.UserID, 0, 0, 0, "", "adjust", req.Credits, 0, 0, model.JSON{
+		"reason":   req.Reason,
+		"admin_id": getAdminID(c),
+		"type":     req.Type,
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	// 获取用户当前余额
-	type balRow struct {
-		Balance int64 `xorm:"balance_credits"`
+	newBalance, _ := service.GetBalance(c.Request.Context(), req.UserID)
+	c.JSON(http.StatusOK, gin.H{"ok": true, "balance_after": newBalance})
+}
+
+// POST /admin/transactions/sync-user-balance  按 Redis 余额修正 DB 并写调账流水
+func SyncUserBalanceFromRedis(c *gin.Context) {
+	var req struct {
+		UserID int64  `json:"user_id" binding:"required"`
+		Reason string `json:"reason"`
 	}
-	var user balRow
-	if found, err := sess.SQL("SELECT balance_credits FROM users WHERE id=$1 FOR UPDATE", req.UserID).Get(&user); err != nil || !found {
-		sess.Rollback()
-		c.JSON(http.StatusBadRequest, gin.H{"error": "用户不存在"})
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-
-	newBalance := user.Balance + req.Credits
-	if newBalance < 0 {
-		newBalance = 0
+	if req.Reason == "" {
+		req.Reason = "sync balance from redis"
 	}
-	if _, err := sess.Exec("UPDATE users SET balance_credits=$1 WHERE id=$2", newBalance, req.UserID); err != nil {
-		sess.Rollback()
+
+	redisBalance, found, err := billing.CachedBalance(c.Request.Context(), req.UserID)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-
-	tx := &model.BillingTransaction{
-		UserID:       req.UserID,
-		Type:         req.Type,
-		Credits:      req.Credits,
-		BalanceAfter: newBalance,
-		Metrics:      model.JSON{"reason": req.Reason, "admin_id": getAdminID(c)},
+	if !found {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Redis 余额不存在"})
+		return
 	}
-	if _, err := sess.Insert(tx); err != nil {
-		sess.Rollback()
+
+	dbBalance, err := service.GetDBBalance(c.Request.Context(), req.UserID)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	sess.Commit()
-	c.JSON(http.StatusOK, gin.H{"ok": true, "balance_after": newBalance, "transaction_id": tx.ID})
+	delta := redisBalance - dbBalance
+	if delta != 0 {
+		if err := service.WriteTx(c.Request.Context(), req.UserID, 0, 0, 0, "", "adjust", delta, 0, 0, model.JSON{
+			"reason":          req.Reason,
+			"admin_id":        getAdminID(c),
+			"source":          "redis",
+			"redis_balance":   redisBalance,
+			"db_balance":      dbBalance,
+			"skip_redis_sync": true,
+		}); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"ok":            true,
+		"db_before":     dbBalance,
+		"redis_balance": redisBalance,
+		"delta":         delta,
+		"balance_after": redisBalance,
+		"changed":       delta != 0,
+	})
 }

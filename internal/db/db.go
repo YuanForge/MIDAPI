@@ -67,6 +67,7 @@ func Init(cfg *config.DBConfig, migrate bool) error {
 		new(model.Vendor),
 		new(model.WithdrawRequest),
 		new(model.UserModelCredit),
+		new(model.BalanceSyncJob),
 		new(model.ChatConversation),
 		// superpower models
 		new(model.CardBatch),
@@ -161,6 +162,12 @@ func ensureIndexes() error {
 			`CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_billing_tx_pool_key_type
 			ON billing_transactions (pool_key_id, type)
 			WHERE pool_key_id != 0`,
+		},
+		{
+			"idx_balance_sync_jobs_pending",
+			`CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_balance_sync_jobs_pending
+			ON balance_sync_jobs (id)
+			WHERE status = 'pending'`,
 		},
 		{
 			"idx_llm_logs_user_id_desc",

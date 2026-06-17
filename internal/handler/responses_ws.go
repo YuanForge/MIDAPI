@@ -229,27 +229,46 @@ func handleWSResponseCreate(c *gin.Context, conn *websocket.Conn, responseData m
 		}
 	}
 
+	c.Set("model_credit_routing_key", routingKey)
+	c.Set("model_credit_charged", modelCreditCharged)
+	c.Set("model_credit_general_charged", generalCreditCharged)
+
 	// refundHold 在错误路径下退还本次预扣
-	refundHold := func(_ string) {
+	refundHold := func(_ string) (refunded, modelRefunded int64) {
 		if totalHold <= 0 {
-			return
+			return 0, 0
 		}
 		if generalCreditCharged > 0 {
-			_ = billing.Refund(c.Request.Context(), userID, generalCreditCharged)
+			if err := billing.Refund(c.Request.Context(), userID, generalCreditCharged); err != nil {
+				log.Printf("[responses-ws] refund general hold failed user_id=%d credits=%d err=%v", userID, generalCreditCharged, err)
+			} else {
+				refunded += generalCreditCharged
+			}
 		}
 		if modelCreditCharged > 0 {
-			_ = billing.RefundModelCredit(c.Request.Context(), userID, routingKey, modelCreditCharged)
+			if err := billing.RefundModelCredit(c.Request.Context(), userID, routingKey, modelCreditCharged); err != nil {
+				log.Printf("[responses-ws] refund model hold failed user_id=%d routing_key=%s credits=%d err=%v", userID, routingKey, modelCreditCharged, err)
+			} else {
+				refunded += modelCreditCharged
+				modelRefunded = modelCreditCharged
+			}
 		}
+		return refunded, modelRefunded
 	}
 
 	corrID := uuid.New().String()
 	if totalHold > 0 {
-		_ = service.WriteTx(c.Request.Context(), userID, ch.ID, apiKeyIDVal, poolKeyIDVal, corrID, "hold", totalHold, upstreamCostHold, modelCreditCharged, model.JSON{
+		if err := service.WriteTx(c.Request.Context(), userID, ch.ID, apiKeyIDVal, poolKeyIDVal, corrID, "hold", totalHold, upstreamCostHold, modelCreditCharged, model.JSON{
 			"input_hold":  inputHold,
 			"output_hold": outputHold,
 			"user_group":  userGroup,
 			"via":         "websocket",
-		})
+		}); err != nil {
+			if modelCreditCharged > 0 {
+				_ = billing.RefundModelCredit(c.Request.Context(), userID, routingKey, modelCreditCharged)
+			}
+			return fmt.Errorf("计费流水写入失败，请稍后重试")
+		}
 	}
 
 	// LLM 日志
@@ -275,9 +294,9 @@ func handleWSResponseCreate(c *gin.Context, conn *websocket.Conn, responseData m
 		usageWS, rawWSMessages, clientResp, wsErr := forwardResponsesWS(c.Request.Context(), conn, c, ch, poolKey, upstreamWSURL, openAIReq)
 		if wsErr != nil {
 			service.RecordChannelError(c.Request.Context(), ch.ID)
-			refundHold("upstream_error")
+			refunded, mcRefunded := refundHold("upstream_error")
 			if totalHold > 0 {
-				_ = service.WriteTx(c.Request.Context(), userID, ch.ID, apiKeyIDVal, poolKeyIDVal, corrID, "refund", totalHold, upstreamCostHold, modelCreditCharged, model.JSON{"reason": "upstream_error"})
+				recordLLMRefundTx(c.Request.Context(), c, userID, ch.ID, apiKeyIDVal, poolKeyIDVal, corrID, refunded, scaleRefundCost(upstreamCostHold, refunded, totalHold), mcRefunded, model.JSON{"reason": "upstream_error"})
 			}
 			enqueueLLMLogPatch(corrID, []string{"status", "error_msg"}, model.LLMLog{Status: "error", ErrorMsg: wsErr.Error()})
 			return wsErr
@@ -294,9 +313,9 @@ func handleWSResponseCreate(c *gin.Context, conn *websocket.Conn, responseData m
 		_, resp, reqErr := sendLLMRequest(c, ch, openAIReq, poolKey, proto, resolvedModel, true)
 		if reqErr != nil {
 			service.RecordChannelError(c.Request.Context(), ch.ID)
-			refundHold("upstream_error")
+			refunded, mcRefunded := refundHold("upstream_error")
 			if totalHold > 0 {
-				_ = service.WriteTx(c.Request.Context(), userID, ch.ID, apiKeyIDVal, poolKeyIDVal, corrID, "refund", totalHold, upstreamCostHold, modelCreditCharged, model.JSON{"reason": "upstream_error"})
+				recordLLMRefundTx(c.Request.Context(), c, userID, ch.ID, apiKeyIDVal, poolKeyIDVal, corrID, refunded, scaleRefundCost(upstreamCostHold, refunded, totalHold), mcRefunded, model.JSON{"reason": "upstream_error"})
 			}
 			enqueueLLMLogPatch(corrID, []string{"status", "error_msg"}, model.LLMLog{Status: "error", ErrorMsg: reqErr.Error()})
 			return reqErr
@@ -306,9 +325,9 @@ func handleWSResponseCreate(c *gin.Context, conn *websocket.Conn, responseData m
 		if resp.StatusCode != http.StatusOK {
 			bodyErr, _ := io.ReadAll(resp.Body)
 			service.RecordChannelError(c.Request.Context(), ch.ID)
-			refundHold("upstream_error")
+			refunded, mcRefunded := refundHold("upstream_error")
 			if totalHold > 0 {
-				_ = service.WriteTx(c.Request.Context(), userID, ch.ID, apiKeyIDVal, poolKeyIDVal, corrID, "refund", totalHold, upstreamCostHold, modelCreditCharged, model.JSON{"reason": "upstream_error"})
+				recordLLMRefundTx(c.Request.Context(), c, userID, ch.ID, apiKeyIDVal, poolKeyIDVal, corrID, refunded, scaleRefundCost(upstreamCostHold, refunded, totalHold), mcRefunded, model.JSON{"reason": "upstream_error"})
 			}
 			enqueueLLMLogPatch(corrID, []string{"status", "upstream_status", "error_msg"}, model.LLMLog{Status: "error", UpstreamStatus: resp.StatusCode, ErrorMsg: string(bodyErr)})
 			return fmt.Errorf("上游返回 %d: %s", resp.StatusCode, string(bodyErr))
@@ -366,13 +385,9 @@ func handleWSResponseCreate(c *gin.Context, conn *websocket.Conn, responseData m
 		// 关键：补充 Scan 循环后的错误检查
 		if scanErr := scanner.Err(); scanErr != nil && !wsError {
 			service.RecordChannelError(c.Request.Context(), ch.ID)
-			refundHold("upstream_stream_read_error")
+			refunded, mcRefunded := refundHold("upstream_stream_read_error")
 			if totalHold > 0 {
-				_ = service.WriteTx(
-					c.Request.Context(), userID, ch.ID, apiKeyIDVal, poolKeyIDVal, corrID,
-					"refund", totalHold, upstreamCostHold, modelCreditCharged,
-					model.JSON{"reason": "upstream_stream_read_error"},
-				)
+				recordLLMRefundTx(c.Request.Context(), c, userID, ch.ID, apiKeyIDVal, poolKeyIDVal, corrID, refunded, scaleRefundCost(upstreamCostHold, refunded, totalHold), mcRefunded, model.JSON{"reason": "upstream_stream_read_error"})
 			}
 			enqueueLLMLogPatch(corrID, []string{"status", "error_msg"}, model.LLMLog{Status: "error", ErrorMsg: scanErr.Error()})
 			return fmt.Errorf("读取上游流失败: %w", scanErr)
@@ -400,11 +415,6 @@ func handleWSResponseCreate(c *gin.Context, conn *websocket.Conn, responseData m
 		})
 		usageForSettle = usg.normalized(origReqData)
 	}
-
-	// 将预扣/退款状态写入 gin context 供 llmSettle 内部 llmRefundCredits 读取
-	c.Set("model_credit_routing_key", routingKey)
-	c.Set("model_credit_charged", modelCreditCharged)
-	c.Set("model_credit_general_charged", generalCreditCharged)
 
 	llmSettle(c, ch, origReqData, usageForSettle, totalHold, userID, ch.ID, apiKeyIDVal, poolKeyIDVal, corrID, userGroup)
 	return nil

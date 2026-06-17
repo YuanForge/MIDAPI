@@ -218,22 +218,6 @@ func ToggleVendorSubmittable(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"vendor_submittable": pool.VendorSubmittable})
 }
 
-// SyncKeyPoolFromUpstream POST /admin/key-pools/:id/sync-upstream?ensure=1
-// 从绑定渠道关联的 New API 上游平台同步已有 Key；ensure=1 时没有可导入 Key 会创建一个新上游 Key。
-func SyncKeyPoolFromUpstream(c *gin.Context) {
-	poolID, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "号池 ID 格式错误"})
-		return
-	}
-	result, err := service.SyncKeyPoolFromUpstream(c.Request.Context(), poolID)
-	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error(), "result": result})
-		return
-	}
-	c.JSON(http.StatusOK, result)
-}
-
 // ImportPoolKeys POST /admin/key-pools/:id/keys/import
 // 批量导入 Key（逐行或 CSV，自动去重）。
 func ImportPoolKeys(c *gin.Context) {

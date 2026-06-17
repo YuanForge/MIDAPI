@@ -41,10 +41,6 @@ type TaskJob struct {
 	// 全部 Key 都尝试过后再走渠道级重试策略。
 	PoolRetryKeyIDs []int64 `json:"pool_retry_key_ids,omitempty"`
 
-	// 当前 PoolKey 是否由本次上游同步新建。若新 Key 立即 401/403/429，
-	// 说明当前上游渠道不可用，应直接进入渠道级重试。
-	PoolKeyCreatedUpstream bool `json:"pool_key_created_upstream,omitempty"`
-
 	// 稳定密钥失败重试：按售价升序排列的剩余待试渠道 ID 列表（不含当前渠道）。
 	// 结果处理器在 OutcomeFailed 时若此列表非空，则换下一个渠道重新发布任务。
 	RetryChannelIDs []int64 `json:"retry_channel_ids,omitempty"`
@@ -87,9 +83,8 @@ type WorkerResult struct {
 	UpstreamResponse map[string]interface{} `json:"upstream_response,omitempty"`
 
 	// 传回给服务器以便在 OutcomeRateLimited 时重新发布
-	RetryCount             int                    `json:"retry_count,omitempty"`
-	Payload                map[string]interface{} `json:"payload,omitempty"`
-	PoolRetryKeyIDs        []int64                `json:"pool_retry_key_ids,omitempty"` // 521/504 号池内重试：已试 Key ID
-	PoolKeyCreatedUpstream bool                   `json:"pool_key_created_upstream,omitempty"`
-	RetryChannelIDs        []int64                `json:"retry_channel_ids,omitempty"` // 稳定密钥：剩余待试渠道 ID
+	RetryCount      int                    `json:"retry_count,omitempty"`
+	Payload         map[string]interface{} `json:"payload,omitempty"`
+	PoolRetryKeyIDs []int64                `json:"pool_retry_key_ids,omitempty"` // 521/504 号池内重试：已试 Key ID
+	RetryChannelIDs []int64                `json:"retry_channel_ids,omitempty"`  // 稳定密钥：剩余待试渠道 ID
 }

@@ -77,8 +77,6 @@ func handleResult(msg *nats.Msg) {
 		retryErrMsg := ""
 		if res.PoolKeyID <= 0 {
 			retryErrMsg = "pool key retry unavailable"
-		} else if res.PoolKeyCreatedUpstream {
-			retryErrMsg = "new upstream pool key returned rate limit"
 		} else if len(triedKeyIDs) >= maxPoolKeyExhaustRetries {
 			retryErrMsg = "pool key exhausted after retry"
 		} else {
@@ -86,35 +84,34 @@ func handleResult(msg *nats.Msg) {
 			if err != nil {
 				retryErrMsg = "rate limited + channel load failed: " + err.Error()
 			} else {
-				newKey, syncResult, err := service.MarkExhaustedAndRotateWithSync(ctx, ch.KeyPoolID, res.PoolKeyID, res.UserID)
+				newKey, err := service.MarkExhaustedAndRotate(ctx, ch.KeyPoolID, res.PoolKeyID, res.UserID)
 				if err == nil && newKey != nil {
 					job := &model.TaskJob{
-						TaskID:                 res.TaskID,
-						TaskType:               res.TaskType,
-						UserID:                 res.UserID,
-						APIKeyID:               res.APIKeyID,
-						CorrID:                 res.CorrID,
-						CreditsCharged:         res.CreditsCharged,
-						ChannelID:              res.ChannelID,
-						BaseURL:                ch.BaseURL,
-						Method:                 ch.Method,
-						Headers:                ch.Headers,
-						TimeoutMs:              ch.TimeoutMs,
-						QueryTimeoutMs:         ch.QueryTimeoutMs,
-						RequestScript:          ch.RequestScript,
-						ResponseScript:         ch.ResponseScript,
-						ErrorScript:            ch.ErrorScript,
-						QueryURL:               ch.QueryURL,
-						QueryMethod:            ch.QueryMethod,
-						QueryScript:            ch.QueryScript,
-						PoolKeyID:              newKey.ID,
-						PoolKeyValue:           newKey.Value,
-						PoolKeyBaseURL:         newKey.BaseURLOverride,
-						Payload:                res.Payload,
-						RetryCount:             res.RetryCount + 1,
-						PoolRetryKeyIDs:        triedKeyIDs,
-						PoolKeyCreatedUpstream: syncResult.CreatedUpstream > 0,
-						RetryChannelIDs:        res.RetryChannelIDs, // 透传：429 轮转 Key 重试若仍失败，仍可触发稳定密钥换渠道重试
+						TaskID:          res.TaskID,
+						TaskType:        res.TaskType,
+						UserID:          res.UserID,
+						APIKeyID:        res.APIKeyID,
+						CorrID:          res.CorrID,
+						CreditsCharged:  res.CreditsCharged,
+						ChannelID:       res.ChannelID,
+						BaseURL:         ch.BaseURL,
+						Method:          ch.Method,
+						Headers:         ch.Headers,
+						TimeoutMs:       ch.TimeoutMs,
+						QueryTimeoutMs:  ch.QueryTimeoutMs,
+						RequestScript:   ch.RequestScript,
+						ResponseScript:  ch.ResponseScript,
+						ErrorScript:     ch.ErrorScript,
+						QueryURL:        ch.QueryURL,
+						QueryMethod:     ch.QueryMethod,
+						QueryScript:     ch.QueryScript,
+						PoolKeyID:       newKey.ID,
+						PoolKeyValue:    newKey.Value,
+						PoolKeyBaseURL:  newKey.BaseURLOverride,
+						Payload:         res.Payload,
+						RetryCount:      res.RetryCount + 1,
+						PoolRetryKeyIDs: triedKeyIDs,
+						RetryChannelIDs: res.RetryChannelIDs, // 透传：429 轮转 Key 重试若仍失败，仍可触发稳定密钥换渠道重试
 					}
 					data, _ := json.Marshal(job)
 					subject := fmt.Sprintf("task.%s.%d", res.TaskType, res.ChannelID)
@@ -140,32 +137,31 @@ func handleResult(msg *nats.Msg) {
 			newKey, rotateErr := service.RotatePoolKeySkipping(ctx, poolRetryChannel.KeyPoolID, res.UserID, triedKeyIDs)
 			if rotateErr == nil && newKey != nil {
 				job := &model.TaskJob{
-					TaskID:                 res.TaskID,
-					TaskType:               res.TaskType,
-					UserID:                 res.UserID,
-					APIKeyID:               res.APIKeyID,
-					CorrID:                 res.CorrID,
-					CreditsCharged:         res.CreditsCharged,
-					ChannelID:              res.ChannelID,
-					BaseURL:                poolRetryChannel.BaseURL,
-					Method:                 poolRetryChannel.Method,
-					Headers:                poolRetryChannel.Headers,
-					TimeoutMs:              poolRetryChannel.TimeoutMs,
-					QueryTimeoutMs:         poolRetryChannel.QueryTimeoutMs,
-					RequestScript:          poolRetryChannel.RequestScript,
-					ResponseScript:         poolRetryChannel.ResponseScript,
-					ErrorScript:            poolRetryChannel.ErrorScript,
-					QueryURL:               poolRetryChannel.QueryURL,
-					QueryMethod:            poolRetryChannel.QueryMethod,
-					QueryScript:            poolRetryChannel.QueryScript,
-					PoolKeyID:              newKey.ID,
-					PoolKeyValue:           newKey.Value,
-					PoolKeyBaseURL:         newKey.BaseURLOverride,
-					Payload:                res.Payload,
-					RetryCount:             res.RetryCount,
-					PoolRetryKeyIDs:        triedKeyIDs,
-					PoolKeyCreatedUpstream: false,
-					RetryChannelIDs:        res.RetryChannelIDs,
+					TaskID:          res.TaskID,
+					TaskType:        res.TaskType,
+					UserID:          res.UserID,
+					APIKeyID:        res.APIKeyID,
+					CorrID:          res.CorrID,
+					CreditsCharged:  res.CreditsCharged,
+					ChannelID:       res.ChannelID,
+					BaseURL:         poolRetryChannel.BaseURL,
+					Method:          poolRetryChannel.Method,
+					Headers:         poolRetryChannel.Headers,
+					TimeoutMs:       poolRetryChannel.TimeoutMs,
+					QueryTimeoutMs:  poolRetryChannel.QueryTimeoutMs,
+					RequestScript:   poolRetryChannel.RequestScript,
+					ResponseScript:  poolRetryChannel.ResponseScript,
+					ErrorScript:     poolRetryChannel.ErrorScript,
+					QueryURL:        poolRetryChannel.QueryURL,
+					QueryMethod:     poolRetryChannel.QueryMethod,
+					QueryScript:     poolRetryChannel.QueryScript,
+					PoolKeyID:       newKey.ID,
+					PoolKeyValue:    newKey.Value,
+					PoolKeyBaseURL:  newKey.BaseURLOverride,
+					Payload:         res.Payload,
+					RetryCount:      res.RetryCount,
+					PoolRetryKeyIDs: triedKeyIDs,
+					RetryChannelIDs: res.RetryChannelIDs,
 				}
 				updateProcessingTask(ctx, res.TaskID, upstreamReq, upstreamResp)
 				data, _ := json.Marshal(job)
@@ -218,17 +214,36 @@ func handleResult(msg *nats.Msg) {
 						}
 					}
 					if mcChargedOld > 0 && routingKeyOld != "" {
-						_ = billing.RefundModelCredit(ctx, res.UserID, routingKeyOld, mcChargedOld)
+						if err := billing.RefundModelCredit(ctx, res.UserID, routingKeyOld, mcChargedOld); err != nil {
+							log.Printf("[result-proc] task %d: refund old model credit failed: %v", res.TaskID, err)
+							mcChargedOld = 0
+						}
 					}
-					generalRefundOld := res.CreditsCharged - mcChargedOld
+					generalRefundOld := res.CreditsCharged - chargeTx.ModelCreditCharged
+					refundedOld := mcChargedOld
 					if generalRefundOld > 0 {
-						_ = billing.Refund(ctx, res.UserID, generalRefundOld)
+						if err := billing.Refund(ctx, res.UserID, generalRefundOld); err != nil {
+							log.Printf("[result-proc] task %d: refund old general balance failed: %v", res.TaskID, err)
+						} else {
+							refundedOld += generalRefundOld
+						}
 					}
-					_ = service.WriteTx(ctx, res.UserID, res.ChannelID, res.APIKeyID, res.PoolKeyID, res.CorrID, "refund", res.CreditsCharged, upstreamCostOld, mcChargedOld, model.JSON{
+					if refundedOld <= 0 {
+						failTaskDB(ctx, res.TaskID, res.UserID, res.ChannelID, res.APIKeyID, res.CorrID, 0, "retry refund failed")
+						_ = msg.Ack()
+						return
+					}
+					if err := service.WriteTx(ctx, res.UserID, res.ChannelID, res.APIKeyID, res.PoolKeyID, res.CorrID, "refund", refundedOld, scaleCost(upstreamCostOld, refundedOld, res.CreditsCharged), mcChargedOld, model.JSON{
 						"task_id":     res.TaskID,
 						"routing_key": routingKeyOld,
 						"reason":      "stable_key_channel_retry",
-					})
+					}); err != nil {
+						log.Printf("[result-proc] task %d: write retry refund tx failed: %v", res.TaskID, err)
+						revertTaskRefund(ctx, res.UserID, res.TaskID, res.CreditsCharged, mcChargedOld, routingKeyOld)
+						failTaskDB(ctx, res.TaskID, res.UserID, res.ChannelID, res.APIKeyID, res.CorrID, 0, "billing refund transaction failed: "+err.Error())
+						_ = msg.Ack()
+						return
+					}
 				}
 
 				var userGroup string
@@ -274,12 +289,18 @@ func handleResult(msg *nats.Msg) {
 				}
 				// 写新的扣费流水
 				newCorrID := res.CorrID + "_r" + fmt.Sprintf("%d", nextChannelID)
-				_ = service.WriteTx(ctx, res.UserID, nextChannelID, res.APIKeyID, 0, newCorrID, "charge", newCost, newUpstreamCost, newModelCreditCharged, model.JSON{
+				if err := service.WriteTx(ctx, res.UserID, nextChannelID, res.APIKeyID, 0, newCorrID, "charge", newCost, newUpstreamCost, newModelCreditCharged, model.JSON{
 					"task_id":      res.TaskID,
 					"retry_of":     res.ChannelID,
 					"routing_key":  newRoutingKey,
 					"stable_retry": true,
-				})
+				}); err != nil {
+					log.Printf("[result-proc] task %d: write retry charge tx failed: %v", res.TaskID, err)
+					revertTaskCharge(ctx, res.UserID, res.TaskID, newCost, newModelCreditCharged, newRoutingKey)
+					failTaskDB(ctx, res.TaskID, res.UserID, res.ChannelID, res.APIKeyID, res.CorrID, 0, "billing charge transaction failed: "+err.Error())
+					_ = msg.Ack()
+					return
+				}
 
 				// 更新 DB 中的渠道、费用和剩余重试列表
 				// remaining 可能为空，使用 Cols() 强制写入空数组，避免后续异步失败时再次重试已尝试的渠道
@@ -307,30 +328,29 @@ func handleResult(msg *nats.Msg) {
 
 				// 重新发布到新渠道
 				retryJob := &model.TaskJob{
-					TaskID:                 res.TaskID,
-					TaskType:               res.TaskType,
-					UserID:                 res.UserID,
-					APIKeyID:               res.APIKeyID,
-					CorrID:                 newCorrID,
-					CreditsCharged:         newCost,
-					ChannelID:              nextChannelID,
-					BaseURL:                nextCh.BaseURL,
-					Method:                 nextCh.Method,
-					Headers:                nextCh.Headers,
-					TimeoutMs:              nextCh.TimeoutMs,
-					QueryTimeoutMs:         nextCh.QueryTimeoutMs,
-					RequestScript:          nextCh.RequestScript,
-					ResponseScript:         nextCh.ResponseScript,
-					ErrorScript:            nextCh.ErrorScript,
-					QueryURL:               nextCh.QueryURL,
-					QueryMethod:            nextCh.QueryMethod,
-					QueryScript:            nextCh.QueryScript,
-					PoolKeyID:              poolKeyID,
-					PoolKeyValue:           poolKeyValue,
-					PoolKeyBaseURL:         poolKeyBaseURL,
-					Payload:                res.Payload,
-					PoolKeyCreatedUpstream: false,
-					RetryChannelIDs:        remaining,
+					TaskID:          res.TaskID,
+					TaskType:        res.TaskType,
+					UserID:          res.UserID,
+					APIKeyID:        res.APIKeyID,
+					CorrID:          newCorrID,
+					CreditsCharged:  newCost,
+					ChannelID:       nextChannelID,
+					BaseURL:         nextCh.BaseURL,
+					Method:          nextCh.Method,
+					Headers:         nextCh.Headers,
+					TimeoutMs:       nextCh.TimeoutMs,
+					QueryTimeoutMs:  nextCh.QueryTimeoutMs,
+					RequestScript:   nextCh.RequestScript,
+					ResponseScript:  nextCh.ResponseScript,
+					ErrorScript:     nextCh.ErrorScript,
+					QueryURL:        nextCh.QueryURL,
+					QueryMethod:     nextCh.QueryMethod,
+					QueryScript:     nextCh.QueryScript,
+					PoolKeyID:       poolKeyID,
+					PoolKeyValue:    poolKeyValue,
+					PoolKeyBaseURL:  poolKeyBaseURL,
+					Payload:         res.Payload,
+					RetryChannelIDs: remaining,
 				}
 				data, _ := json.Marshal(retryJob)
 				subject := fmt.Sprintf("task.%s.%d", res.TaskType, nextChannelID)
@@ -423,20 +443,66 @@ func failTaskDB(ctx context.Context, taskID, userID, channelID, apiKeyID int64, 
 
 	// 优先退还专属模型积分，剩余退还通用余额
 	if mcCharged > 0 && routingKey != "" {
-		_ = billing.RefundModelCredit(ctx, userID, routingKey, mcCharged)
-	}
-	generalRefund := credits - mcCharged
-	if generalRefund > 0 {
-		if err := billing.Refund(ctx, userID, generalRefund); err != nil {
-			log.Printf("[result-proc] task %d: refund (Redis) failed: %v — proceeding to update DB", taskID, err)
+		if err := billing.RefundModelCredit(ctx, userID, routingKey, mcCharged); err != nil {
+			log.Printf("[result-proc] task %d: refund model credit failed: %v", taskID, err)
+			mcCharged = 0
 		}
 	}
-	_ = service.WriteTx(ctx, userID, channelID, apiKeyID, poolKeyID, corrID, "refund", credits, upstreamCost, mcCharged, model.JSON{
+	generalRefund := credits - chargeTx.ModelCreditCharged
+	refunded := mcCharged
+	if generalRefund > 0 {
+		if err := billing.Refund(ctx, userID, generalRefund); err != nil {
+			log.Printf("[result-proc] task %d: refund (Redis) failed: %v", taskID, err)
+		} else {
+			refunded += generalRefund
+		}
+	}
+	if refunded <= 0 {
+		log.Printf("[result-proc] task %d: no credits refunded to user %d", taskID, userID)
+		return
+	}
+	if err := service.WriteTx(ctx, userID, channelID, apiKeyID, poolKeyID, corrID, "refund", refunded, scaleCost(upstreamCost, refunded, credits), mcCharged, model.JSON{
 		"task_id":     taskID,
 		"routing_key": routingKey,
 		"reason":      userMsg,
-	})
+	}); err != nil {
+		log.Printf("[result-proc] task %d: write refund tx failed: %v", taskID, err)
+		revertTaskRefund(ctx, userID, taskID, credits, mcCharged, routingKey)
+		return
+	}
 	log.Printf("[result-proc] task %d: refunded %d credits (model_credit=%d) to user %d", taskID, credits, mcCharged, userID)
+}
+
+func revertTaskRefund(ctx context.Context, userID, taskID, credits, modelRefunded int64, routingKey string) {
+	if modelRefunded > 0 && routingKey != "" {
+		charged, err := billing.ChargeModelCredit(ctx, userID, routingKey, modelRefunded)
+		if err != nil {
+			log.Printf("[result-proc] task %d: revert model refund failed user=%d routing_key=%s credits=%d err=%v",
+				taskID, userID, routingKey, modelRefunded, err)
+		} else if charged != modelRefunded {
+			log.Printf("[result-proc] task %d: revert model refund partial user=%d routing_key=%s expected=%d charged=%d",
+				taskID, userID, routingKey, modelRefunded, charged)
+		}
+	}
+}
+
+func revertTaskCharge(ctx context.Context, userID, taskID, credits, modelCharged int64, routingKey string) {
+	if modelCharged > 0 && routingKey != "" {
+		if err := billing.RefundModelCredit(ctx, userID, routingKey, modelCharged); err != nil {
+			log.Printf("[result-proc] task %d: revert model charge failed user=%d routing_key=%s credits=%d err=%v",
+				taskID, userID, routingKey, modelCharged, err)
+		}
+	}
+}
+
+func scaleCost(cost, actual, requested int64) int64 {
+	if cost <= 0 || actual <= 0 || requested <= 0 {
+		return 0
+	}
+	if actual >= requested {
+		return cost
+	}
+	return cost * actual / requested
 }
 
 func toJSON(m map[string]interface{}) model.JSON {

@@ -87,26 +87,17 @@ func GetOrAssignPoolKey(ctx context.Context, poolID, entityID int64) (*model.Poo
 	if err == nil {
 		return key, nil
 	}
-	return syncPoolKeysAndRetry(ctx, poolID, entityID, assignKey, 0, err)
+	return nil, err
 }
 
 // MarkExhaustedAndRotate 将 poolKeyID 标记为耗尽（带 TTL），同时为 entityID 轮转到下一可用 Key。
 // 用于检测到上游 429 / 配额不足时主动触发轮转。
 func MarkExhaustedAndRotate(ctx context.Context, poolID, poolKeyID, entityID int64) (*model.PoolKey, error) {
-	key, _, err := MarkExhaustedAndRotateWithSync(ctx, poolID, poolKeyID, entityID)
-	return key, err
-}
-
-func MarkExhaustedAndRotateWithSync(ctx context.Context, poolID, poolKeyID, entityID int64) (*model.PoolKey, KeyPoolSyncResult, error) {
 	exhaustedKey := fmt.Sprintf(exhaustedKeyFmt, poolKeyID)
 	cache.Client.Set(ctx, exhaustedKey, 1, exhaustedTTL)
 
 	assignKey := fmt.Sprintf(assignKeyFmt, poolID, entityID)
-	key, err := rotatePoolKey(ctx, poolID, entityID, assignKey, poolKeyID)
-	if err == nil {
-		return key, KeyPoolSyncResult{}, nil
-	}
-	return syncPoolKeysAndRetryWithResult(ctx, poolID, entityID, assignKey, poolKeyID, err)
+	return rotatePoolKey(ctx, poolID, entityID, assignKey, poolKeyID)
 }
 
 // RotatePoolKeySkipping 在当前请求内轮转到下一个可用 Key，不会把已试 Key 标记为耗尽。
@@ -169,30 +160,6 @@ func rotatePoolKey(ctx context.Context, poolID, _ int64, assignKey string, skipK
 		}
 	}
 	return nil, newPoolKeyStateError(ErrPoolAllKeysExhausted, "号池 %d 的所有 Key 已耗尽", poolID)
-}
-
-func shouldSyncPoolKeys(err error) bool {
-	return errors.Is(err, ErrPoolNoAvailableKeys) || errors.Is(err, ErrPoolAllKeysExhausted)
-}
-
-func syncPoolKeysAndRetry(ctx context.Context, poolID, entityID int64, assignKey string, skipKeyID int64, cause error) (*model.PoolKey, error) {
-	key, _, err := syncPoolKeysAndRetryWithResult(ctx, poolID, entityID, assignKey, skipKeyID, cause)
-	return key, err
-}
-
-func syncPoolKeysAndRetryWithResult(ctx context.Context, poolID, entityID int64, assignKey string, skipKeyID int64, cause error) (*model.PoolKey, KeyPoolSyncResult, error) {
-	if !shouldSyncPoolKeys(cause) {
-		return nil, KeyPoolSyncResult{}, cause
-	}
-	result, err := EnsureKeyPoolFromUpstream(ctx, poolID)
-	if err != nil {
-		return nil, result, fmt.Errorf("%s；同步上游 Key 失败: %v", cause.Error(), err)
-	}
-	key, err := rotatePoolKey(ctx, poolID, entityID, assignKey, skipKeyID)
-	if err != nil {
-		return nil, result, err
-	}
-	return key, result, nil
 }
 
 // ---- 管理接口 ----
