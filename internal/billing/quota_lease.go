@@ -104,8 +104,15 @@ func quotaLeaseDebitPlan(leases []model.BillingQuotaLease, credits int64) ([]quo
 	return plan, remaining == 0
 }
 
-func reserveQuota(ctx context.Context, userID, required int64, reason string) error {
+func reserveQuota(ctx context.Context, userID, required, available int64, reason string) error {
 	if required <= 0 {
+		return nil
+	}
+	if available < 0 {
+		available = 0
+	}
+	needed := quotaReserveNeeded(required, available)
+	if needed <= 0 {
 		return nil
 	}
 
@@ -117,27 +124,6 @@ func reserveQuota(ctx context.Context, userID, required int64, reason string) er
 	if _, err := sess.Exec("SELECT pg_advisory_xact_lock($1, $2)", quotaLeaseLockNamespace, userID); err != nil {
 		_ = sess.Rollback()
 		return err
-	}
-
-	leaseRows, err := sess.QueryString(`
-SELECT remaining_credits
-FROM billing_quota_leases
-WHERE user_id = $1 AND status = 'active' AND expires_at > NOW()
-FOR UPDATE`, userID)
-	if err != nil {
-		_ = sess.Rollback()
-		return err
-	}
-	activeRemaining := int64(0)
-	for _, row := range leaseRows {
-		remaining, _ := strconv.ParseInt(row["remaining_credits"], 10, 64)
-		if remaining > 0 {
-			activeRemaining += remaining
-		}
-	}
-	needed := quotaReserveNeeded(required, activeRemaining)
-	if needed <= 0 {
-		return sess.Commit()
 	}
 
 	rows, err := sess.QueryString("SELECT balance FROM users WHERE id = $1 FOR UPDATE", userID)
@@ -338,7 +324,7 @@ func ensureQuota(ctx context.Context, userID, credits int64) error {
 	if remaining >= credits {
 		return nil
 	}
-	return reserveQuota(ctx, userID, credits, "charge")
+	return reserveQuota(ctx, userID, credits, remaining, "charge")
 }
 
 func ensureRefundQuotaLease(ctx context.Context, userID int64) error {

@@ -359,7 +359,11 @@ func Charge(ctx context.Context, userID, credits int64) error {
 		}
 	}
 	if result == -1 {
-		if err := reserveQuota(ctx, userID, credits, "charge_retry"); err != nil {
+		available, remainingErr := quotaRemaining(ctx, userID)
+		if remainingErr != nil {
+			return remainingErr
+		}
+		if err := reserveQuota(ctx, userID, credits, available, "charge_retry"); err != nil {
 			return err
 		}
 		result, err = luaCharge.Run(ctx, cache.Client, []string{key}, credits).Int64()
@@ -368,7 +372,11 @@ func Charge(ctx context.Context, userID, credits int64) error {
 		}
 		if result == -1 {
 			time.Sleep(quotaChargeRetryDelay)
-			if err := reserveQuota(ctx, userID, credits, "charge_retry_wait"); err != nil {
+			available, remainingErr = quotaRemaining(ctx, userID)
+			if remainingErr != nil {
+				return remainingErr
+			}
+			if err := reserveQuota(ctx, userID, credits, available, "charge_retry_wait"); err != nil {
 				return err
 			}
 			result, err = luaCharge.Run(ctx, cache.Client, []string{key}, credits).Int64()
