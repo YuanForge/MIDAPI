@@ -169,22 +169,6 @@ func ensureIndexes() error {
 			WHERE pool_key_id != 0`,
 		},
 		{
-			"idx_billing_tx_refund_dedupe",
-			`CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx_billing_tx_refund_dedupe
-			ON billing_transactions ((metrics->>$$refund_dedupe_key$$))
-			WHERE type = $$refund$$
-			AND metrics ? $$refund_dedupe_key$$
-			AND metrics->>$$refund_dedupe_key$$ != $$$$`,
-		},
-		{
-			"idx_billing_tx_consumption_dedupe",
-			`CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx_billing_tx_consumption_dedupe
-			ON billing_transactions ((metrics->>$$billing_dedupe_key$$))
-			WHERE type IN ($$charge$$, $$hold$$, $$settle$$)
-			AND metrics ? $$billing_dedupe_key$$
-			AND metrics->>$$billing_dedupe_key$$ != $$$$`,
-		},
-		{
 			"idx_balance_sync_jobs_pending",
 			`CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_balance_sync_jobs_pending
 			ON balance_sync_jobs (id)
