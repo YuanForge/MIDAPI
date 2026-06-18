@@ -16,13 +16,53 @@ import (
 )
 
 const quotaKeyFmt = "billing:quota:%d"
+const quotaVersionKeyFmt = "billing:quota_version:%d"
 const quotaLeaseLockNamespace int64 = 20260618
+const quotaCacheVersion = "2"
 
 var quotaLeaseTTL = 30 * time.Minute
 var quotaLeaseReclaimGrace = 2 * time.Minute
+var quotaChargeRetryDelay = 25 * time.Millisecond
 
 func quotaKey(userID int64) string {
 	return fmt.Sprintf(quotaKeyFmt, userID)
+}
+
+func quotaVersionKey(userID int64) string {
+	return fmt.Sprintf(quotaVersionKeyFmt, userID)
+}
+
+func markQuotaCacheVersion(ctx context.Context, userID int64) {
+	key := quotaVersionKey(userID)
+	_ = cache.Client.Set(ctx, key, quotaCacheVersion, quotaLeaseTTL).Err()
+}
+
+func expireQuotaCache(ctx context.Context, userID int64) {
+	_ = cache.Client.Expire(ctx, quotaKey(userID), quotaLeaseTTL).Err()
+	_ = cache.Client.Expire(ctx, quotaVersionKey(userID), quotaLeaseTTL).Err()
+}
+
+func clearQuotaCache(ctx context.Context, userID int64) {
+	_ = cache.Client.Del(ctx, quotaKey(userID), quotaVersionKey(userID)).Err()
+}
+
+func quotaCacheIsCurrent(ctx context.Context, userID int64) bool {
+	val, err := cache.Client.Get(ctx, quotaVersionKey(userID)).Result()
+	return err == nil && val == quotaCacheVersion
+}
+
+func currentCachedQuota(ctx context.Context, userID int64) (int64, bool, error) {
+	if !quotaCacheIsCurrent(ctx, userID) {
+		return 0, false, nil
+	}
+	val, err := cache.Client.Get(ctx, quotaKey(userID)).Int64()
+	if err == redis.Nil {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return val, true, nil
 }
 
 func quotaLeaseExpiresAt() time.Time {
@@ -34,6 +74,34 @@ func quotaReserveNeeded(required, activeRemaining int64) int64 {
 		return 0
 	}
 	return required - activeRemaining
+}
+
+type quotaLeaseDebit struct {
+	ID     int64
+	Amount int64
+}
+
+func quotaLeaseDebitPlan(leases []model.BillingQuotaLease, credits int64) ([]quotaLeaseDebit, bool) {
+	if credits <= 0 {
+		return nil, true
+	}
+	remaining := credits
+	plan := make([]quotaLeaseDebit, 0, len(leases))
+	for _, lease := range leases {
+		if remaining <= 0 {
+			break
+		}
+		if lease.ID <= 0 || lease.RemainingCredits <= 0 {
+			continue
+		}
+		amount := lease.RemainingCredits
+		if amount > remaining {
+			amount = remaining
+		}
+		plan = append(plan, quotaLeaseDebit{ID: lease.ID, Amount: amount})
+		remaining -= amount
+	}
+	return plan, remaining == 0
 }
 
 func reserveQuota(ctx context.Context, userID, required int64, reason string) error {
@@ -135,7 +203,8 @@ FOR UPDATE`, userID)
 		}
 		return err
 	}
-	_ = cache.Client.Expire(ctx, key, quotaLeaseTTL).Err()
+	markQuotaCacheVersion(ctx, userID)
+	expireQuotaCache(ctx, userID)
 	InvalidateBalanceCache(ctx, userID)
 	return nil
 }
@@ -199,6 +268,9 @@ SELECT release_amount FROM updated_lease`, credits, userID)
 func quotaRemaining(ctx context.Context, userID int64) (int64, error) {
 	val, err := cache.Client.Get(ctx, quotaKey(userID)).Int64()
 	if err == nil {
+		if !quotaCacheIsCurrent(ctx, userID) {
+			return SyncQuotaToRedis(ctx, userID)
+		}
 		return val, nil
 	}
 	if err != redis.Nil {
@@ -207,44 +279,52 @@ func quotaRemaining(ctx context.Context, userID int64) (int64, error) {
 	return SyncQuotaToRedis(ctx, userID)
 }
 
-// SyncQuotaToRedis rebuilds the hot quota key from the active DB lease.
+// SyncQuotaToRedis rebuilds the hot quota key from all active DB leases.
 func SyncQuotaToRedis(ctx context.Context, userID int64) (int64, error) {
-	var row struct {
-		ID               int64     `xorm:"id"`
+	var rows []struct {
 		RemainingCredits int64     `xorm:"remaining_credits"`
 		ExpiresAt        time.Time `xorm:"expires_at"`
 	}
-	found, err := db.Engine.SQL(`
-SELECT id, remaining_credits, expires_at
+	if err := db.Engine.Context(ctx).SQL(`
+SELECT remaining_credits, expires_at
 FROM billing_quota_leases
 WHERE user_id = $1 AND status = 'active' AND expires_at > NOW()
-ORDER BY id DESC
-LIMIT 1`, userID).Get(&row)
-	if err != nil {
+ORDER BY expires_at ASC, id ASC`, userID).Find(&rows); err != nil {
 		return 0, err
 	}
 	key := quotaKey(userID)
-	if !found || row.RemainingCredits <= 0 {
-		_ = cache.Client.Del(ctx, key).Err()
+	total := int64(0)
+	var earliest time.Time
+	for _, row := range rows {
+		if row.RemainingCredits <= 0 {
+			continue
+		}
+		total += row.RemainingCredits
+		if earliest.IsZero() || row.ExpiresAt.Before(earliest) {
+			earliest = row.ExpiresAt
+		}
+	}
+	if total <= 0 || earliest.IsZero() {
+		clearQuotaCache(ctx, userID)
 		return 0, nil
 	}
 	now := time.Now()
-	reclaimAt := row.ExpiresAt.Add(quotaLeaseReclaimGrace)
+	reclaimAt := earliest.Add(quotaLeaseReclaimGrace)
 	if !reclaimAt.After(now) {
-		if err := reclaimQuotaLease(ctx, row.ID); err != nil {
-			return 0, err
-		}
-		_ = cache.Client.Del(ctx, key).Err()
+		clearQuotaCache(ctx, userID)
 		return 0, nil
 	}
-	ttl := time.Until(row.ExpiresAt)
+	ttl := time.Until(earliest)
 	if ttl <= 0 {
 		ttl = time.Until(reclaimAt)
 	}
-	if err := cache.Client.Set(ctx, key, row.RemainingCredits, ttl).Err(); err != nil {
+	if err := cache.Client.Set(ctx, key, total, ttl).Err(); err != nil {
 		return 0, err
 	}
-	return row.RemainingCredits, nil
+	if err := cache.Client.Set(ctx, quotaVersionKey(userID), quotaCacheVersion, ttl).Err(); err != nil {
+		return 0, err
+	}
+	return total, nil
 }
 
 func ensureQuota(ctx context.Context, userID, credits int64) error {
@@ -318,10 +398,15 @@ func ApplyQuotaDelta(ctx context.Context, userID, delta int64) error {
 			_, err = SyncQuotaToRedis(ctx, userID)
 			return err
 		}
+		if !quotaCacheIsCurrent(ctx, userID) {
+			_, err = SyncQuotaToRedis(ctx, userID)
+			return err
+		}
 		if err := cache.Client.IncrBy(ctx, key, delta).Err(); err != nil {
 			return err
 		}
-		_ = cache.Client.Expire(ctx, key, quotaLeaseTTL).Err()
+		markQuotaCacheVersion(ctx, userID)
+		expireQuotaCache(ctx, userID)
 		return nil
 	}
 
@@ -334,6 +419,10 @@ func ApplyQuotaDelta(ctx context.Context, userID, delta int64) error {
 		_, err = SyncQuotaToRedis(ctx, userID)
 		return err
 	}
+	if !quotaCacheIsCurrent(ctx, userID) {
+		_, err = SyncQuotaToRedis(ctx, userID)
+		return err
+	}
 	result, err := luaCharge.Run(ctx, cache.Client, []string{key}, amount).Int64()
 	if err != nil {
 		return err
@@ -341,7 +430,8 @@ func ApplyQuotaDelta(ctx context.Context, userID, delta int64) error {
 	if result < 0 {
 		return fmt.Errorf("授权额度补偿失败")
 	}
-	_ = cache.Client.Expire(ctx, key, quotaLeaseTTL).Err()
+	markQuotaCacheVersion(ctx, userID)
+	expireQuotaCache(ctx, userID)
 	return nil
 }
 
@@ -366,24 +456,33 @@ func ApplyQuotaLeaseTx(sess *xorm.Session, userID int64, txType string, generalC
 	expiresAt := quotaLeaseExpiresAt()
 	switch txType {
 	case "charge", "settle", "hold":
-		rows, err := sess.QueryString(`
+		var leases []model.BillingQuotaLease
+		if err := sess.SQL(`
+SELECT id, remaining_credits
+FROM billing_quota_leases
+WHERE user_id = $1 AND status = 'active' AND expires_at > NOW() AND remaining_credits > 0
+ORDER BY expires_at ASC, id ASC
+FOR UPDATE`, userID).Find(&leases); err != nil {
+			return err
+		}
+		plan, ok := quotaLeaseDebitPlan(leases, generalCredits)
+		if !ok {
+			return fmt.Errorf("授权额度不足或不存在")
+		}
+		for _, debit := range plan {
+			rows, err := sess.QueryString(`
 UPDATE billing_quota_leases
 SET remaining_credits = remaining_credits - $1,
     expires_at = $2,
     updated_at = NOW()
-WHERE id = (
-    SELECT id FROM billing_quota_leases
-    WHERE user_id = $3 AND status = 'active'
-    ORDER BY id DESC
-    LIMIT 1
-)
-AND remaining_credits >= $1
-RETURNING remaining_credits`, generalCredits, expiresAt, userID)
-		if err != nil {
-			return err
-		}
-		if len(rows) == 0 {
-			return fmt.Errorf("授权额度不足或不存在")
+WHERE id = $3 AND remaining_credits >= $1
+RETURNING remaining_credits`, debit.Amount, expiresAt, debit.ID)
+			if err != nil {
+				return err
+			}
+			if len(rows) == 0 {
+				return fmt.Errorf("授权额度不足或不存在")
+			}
 		}
 	case "refund":
 		rows, err := sess.QueryString(`
@@ -393,7 +492,7 @@ SET remaining_credits = remaining_credits + $1,
     updated_at = NOW()
 WHERE id = (
     SELECT id FROM billing_quota_leases
-    WHERE user_id = $3 AND status = 'active'
+    WHERE user_id = $3 AND status = 'active' AND expires_at > NOW()
     ORDER BY id DESC
     LIMIT 1
 )
@@ -421,14 +520,16 @@ RETURNING remaining_credits`, generalCredits, expiresAt, userID)
 // SpendableBalance returns free DB balance plus active authorized quota.
 func SpendableBalance(ctx context.Context, userID int64) (int64, error) {
 	var row struct {
-		Balance int64 `xorm:"balance"`
+		Balance     int64 `xorm:"balance"`
+		ActiveLease int64 `xorm:"active_lease"`
 	}
 	found, err := db.Engine.Context(ctx).SQL(`
-SELECT u.balance + COALESCE((
+SELECT u.balance,
+COALESCE((
     SELECT SUM(remaining_credits)
     FROM billing_quota_leases
     WHERE user_id = u.id AND status = 'active' AND expires_at > NOW()
-), 0) AS balance
+), 0) AS active_lease
 FROM users u
 WHERE u.id = $1`, userID).Get(&row)
 	if err != nil {
@@ -437,7 +538,10 @@ WHERE u.id = $1`, userID).Get(&row)
 	if !found {
 		return 0, fmt.Errorf("用户不存在")
 	}
-	return row.Balance, nil
+	if quota, ok, err := currentCachedQuota(ctx, userID); err == nil && ok {
+		return row.Balance + quota, nil
+	}
+	return row.Balance + row.ActiveLease, nil
 }
 
 func SpendableBalanceTx(sess *xorm.Session, userID int64) (int64, error) {
@@ -534,7 +638,7 @@ func reclaimQuotaLease(ctx context.Context, leaseID int64) error {
 	if err := sess.Commit(); err != nil {
 		return err
 	}
-	_ = cache.Client.Del(ctx, quotaKey(lease.UserID)).Err()
+	clearQuotaCache(ctx, lease.UserID)
 	InvalidateBalanceCache(ctx, lease.UserID)
 	return nil
 }

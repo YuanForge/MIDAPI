@@ -123,11 +123,6 @@ func handleWSResponseCreate(c *gin.Context, conn *websocket.Conn, responseData m
 	// 始终启用流式（WS 模式仅支持 stream）
 	responseData["stream"] = true
 
-	// 余额前置检查
-	if bal, balErr := billing.GetBalance(c.Request.Context(), userID); balErr == nil && bal <= 0 {
-		return fmt.Errorf("余额不足，请充值后继续使用")
-	}
-
 	// 渠道选择
 	routingKey, _ := responseData["model"].(string)
 	if routingKey == "" {

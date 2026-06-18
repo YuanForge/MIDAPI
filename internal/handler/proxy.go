@@ -155,12 +155,6 @@ func createTask(c *gin.Context, taskType string, reqData map[string]interface{})
 		userGroup, _ = raw.(string)
 	}
 
-	// 余额前置检查：通用余额 <= 0 时直接拒绝，无论模型定价是否为 0。
-	if bal, balErr := billing.GetBalance(c.Request.Context(), userID); balErr == nil && bal <= 0 {
-		c.JSON(http.StatusPaymentRequired, gin.H{"error": "余额不足，请充值后继续使用"})
-		return
-	}
-
 	// 渠道解析：优先 channel_id 查询参数（兼容旧客户端），否则用 reqData["model"] 按渠道名路由。
 	var ch *model.Channel
 	var stableChannels []model.Channel // 稳定密钥：按价格排序的候选列表

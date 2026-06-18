@@ -62,11 +62,6 @@ func RealtimeWSProxy(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "渠道不存在: " + routingModel})
 		return
 	}
-	if bal, balErr := billing.GetBalance(c.Request.Context(), userID); balErr == nil && bal <= 0 {
-		c.JSON(http.StatusPaymentRequired, gin.H{"error": "余额不足，请充值后继续使用"})
-		return
-	}
-
 	resolvedModel := routingModel
 	if strings.TrimSpace(ch.Model) != "" {
 		resolvedModel = strings.TrimSpace(ch.Model)

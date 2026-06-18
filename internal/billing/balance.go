@@ -366,6 +366,16 @@ func Charge(ctx context.Context, userID, credits int64) error {
 		if err != nil {
 			return err
 		}
+		if result == -1 {
+			time.Sleep(quotaChargeRetryDelay)
+			if err := reserveQuota(ctx, userID, credits, "charge_retry_wait"); err != nil {
+				return err
+			}
+			result, err = luaCharge.Run(ctx, cache.Client, []string{key}, credits).Int64()
+			if err != nil {
+				return err
+			}
+		}
 		if result < 0 {
 			return fmt.Errorf("余额不足")
 		}
@@ -373,7 +383,8 @@ func Charge(ctx context.Context, userID, credits int64) error {
 	if result == -2 {
 		return fmt.Errorf("授权额度异常，请联系管理员")
 	}
-	_ = cache.Client.Expire(ctx, key, quotaLeaseTTL).Err()
+	markQuotaCacheVersion(ctx, userID)
+	expireQuotaCache(ctx, userID)
 	return nil
 }
 
@@ -393,6 +404,7 @@ func Refund(ctx context.Context, userID, credits int64) error {
 	if err := cache.Client.IncrBy(ctx, key, credits).Err(); err != nil {
 		return err
 	}
-	_ = cache.Client.Expire(ctx, key, quotaLeaseTTL).Err()
+	markQuotaCacheVersion(ctx, userID)
+	expireQuotaCache(ctx, userID)
 	return nil
 }
