@@ -156,6 +156,16 @@ func parseInt64Field(row map[string]string, key string) int64 {
 func (h *AuthHandler) DeleteAPIKey(c *gin.Context) {
 	userID := c.MustGet("user_id").(int64)
 	keyID := strings.TrimSpace(c.Param("id"))
+	var apiKey model.APIKey
+	found, err := db.Engine.Where("id = ? AND user_id = ?", keyID, userID).Cols("key_hash").Get(&apiKey)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if !found {
+		c.JSON(http.StatusNotFound, gin.H{"error": "API Key 不存在"})
+		return
+	}
 	affected, err := db.Engine.Where("id = ? AND user_id = ?", keyID, userID).
 		Delete(&model.APIKey{})
 	if err != nil {
@@ -166,5 +176,6 @@ func (h *AuthHandler) DeleteAPIKey(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "API Key 不存在"})
 		return
 	}
+	service.InvalidateAPIKeyCache(c.Request.Context(), apiKey.KeyHash)
 	c.JSON(http.StatusOK, gin.H{"message": "API Key 已删除"})
 }

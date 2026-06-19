@@ -3,8 +3,10 @@ package handler
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"mime"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -28,6 +30,8 @@ var uploadVideoCategories = map[string]string{
 type uploadRule struct {
 	maxSize         int64
 	contentPrefixes []string
+	allowedExts     map[string]bool
+	sniffPrefixes   []string
 	defaultExt      string
 	emptyFileMsg    string
 	tooLargeMsg     string
@@ -38,21 +42,28 @@ type uploadRule struct {
 var imageUploadRule = uploadRule{
 	maxSize:         10 * 1024 * 1024,
 	contentPrefixes: []string{"image/"},
-	defaultExt:      ".png",
-	emptyFileMsg:    "请选择要上传的图片",
-	tooLargeMsg:     "图片不能超过 10MB",
-	invalidTypeMsg:  "仅支持上传图片文件",
-	saveFailedMsg:   "保存图片失败",
+	allowedExts: map[string]bool{
+		".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".webp": true,
+	},
+	sniffPrefixes:  []string{"image/"},
+	defaultExt:     ".png",
+	emptyFileMsg:   "请选择要上传的图片",
+	tooLargeMsg:    "图片不能超过 10MB",
+	invalidTypeMsg: "仅支持上传图片文件",
+	saveFailedMsg:  "保存图片失败",
 }
 
 var videoUploadRule = uploadRule{
 	maxSize:         200 * 1024 * 1024,
 	contentPrefixes: []string{"video/"},
-	defaultExt:      ".mp4",
-	emptyFileMsg:    "请选择要上传的视频",
-	tooLargeMsg:     "视频不能超过 200MB",
-	invalidTypeMsg:  "仅支持上传视频文件",
-	saveFailedMsg:   "保存视频失败",
+	allowedExts: map[string]bool{
+		".mp4": true, ".mov": true, ".webm": true,
+	},
+	defaultExt:     ".mp4",
+	emptyFileMsg:   "请选择要上传的视频",
+	tooLargeMsg:    "视频不能超过 200MB",
+	invalidTypeMsg: "仅支持上传视频文件",
+	saveFailedMsg:  "保存视频失败",
 }
 
 func hasAllowedContentType(contentType string, prefixes []string) bool {
@@ -62,6 +73,74 @@ func hasAllowedContentType(contentType string, prefixes []string) bool {
 		}
 	}
 	return false
+}
+
+func parseContentType(value string) string {
+	mediaType, _, err := mime.ParseMediaType(value)
+	if err != nil {
+		return strings.ToLower(strings.TrimSpace(value))
+	}
+	return strings.ToLower(mediaType)
+}
+
+func resolveAllowedUploadExtension(file *multipart.FileHeader, contentType string, rule uploadRule) (string, error) {
+	ext := strings.ToLower(filepath.Ext(file.Filename))
+	if ext == "" {
+		extensions, _ := mime.ExtensionsByType(contentType)
+		for _, candidate := range extensions {
+			candidate = strings.ToLower(candidate)
+			if rule.allowedExts[candidate] {
+				ext = candidate
+				break
+			}
+		}
+	}
+	if ext == "" {
+		ext = rule.defaultExt
+	}
+	if !rule.allowedExts[ext] {
+		return "", errors.New(rule.invalidTypeMsg)
+	}
+	return ext, nil
+}
+
+func sniffUploadContentType(file *multipart.FileHeader) (string, error) {
+	src, err := file.Open()
+	if err != nil {
+		return "", err
+	}
+	defer src.Close()
+
+	header := make([]byte, 512)
+	n, err := src.Read(header)
+	if err != nil && n == 0 {
+		return "", err
+	}
+	return http.DetectContentType(header[:n]), nil
+}
+
+func validateUploadedMedia(file *multipart.FileHeader, rule uploadRule) (string, error) {
+	contentType := parseContentType(file.Header.Get("Content-Type"))
+	if contentType == "" || !hasAllowedContentType(contentType, rule.contentPrefixes) {
+		return "", errors.New(rule.invalidTypeMsg)
+	}
+	ext, err := resolveAllowedUploadExtension(file, contentType, rule)
+	if err != nil {
+		return "", err
+	}
+	detectedType, err := sniffUploadContentType(file)
+	if err != nil {
+		return "", errors.New(rule.invalidTypeMsg)
+	}
+	for _, prefix := range rule.sniffPrefixes {
+		if strings.HasPrefix(detectedType, prefix) {
+			return ext, nil
+		}
+	}
+	if strings.HasPrefix(detectedType, "text/") || detectedType == "application/xml" || detectedType == "application/octet-stream" && strings.HasPrefix(contentType, "image/") {
+		return "", errors.New(rule.invalidTypeMsg)
+	}
+	return ext, nil
 }
 
 func saveUploadedMedia(c *gin.Context, category string, rule uploadRule) {
@@ -81,21 +160,10 @@ func saveUploadedMedia(c *gin.Context, category string, rule uploadRule) {
 		return
 	}
 
-	contentType := file.Header.Get("Content-Type")
-	if contentType == "" || !hasAllowedContentType(contentType, rule.contentPrefixes) {
+	ext, err := validateUploadedMedia(file, rule)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": rule.invalidTypeMsg})
 		return
-	}
-
-	ext := strings.ToLower(filepath.Ext(file.Filename))
-	if ext == "" {
-		extensions, _ := mime.ExtensionsByType(contentType)
-		if len(extensions) > 0 {
-			ext = strings.ToLower(extensions[0])
-		}
-	}
-	if ext == "" {
-		ext = rule.defaultExt
 	}
 
 	subdir := filepath.Join("uploads", category)

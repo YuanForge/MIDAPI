@@ -63,6 +63,21 @@ func expandReferVideos(videos []string, baseURL string) []string {
 	return expanded
 }
 
+func isWorkerReservedField(name string) bool {
+	return strings.HasPrefix(strings.TrimSpace(name), "_")
+}
+
+func copyExtraFields(raw map[string]interface{}, known map[string]bool) map[string]interface{} {
+	extra := make(map[string]interface{})
+	for k, v := range raw {
+		if known[k] || isWorkerReservedField(k) {
+			continue
+		}
+		extra[k] = v
+	}
+	return extra
+}
+
 // bindImageRequest 将请求 body 解析为 ImageRequest。
 // 先按结构体绑定固定字段（做必填校验），再将原始 JSON 中其余字段写入 Extra，
 // Extra 字段经 ToMap() 合并后透传给 JS 映射脚本。
@@ -81,12 +96,7 @@ func bindImageRequest(bodyBytes []byte) (*model.ImageRequest, error) {
 	var raw map[string]interface{}
 	_ = json.Unmarshal(bodyBytes, &raw)
 	known := map[string]bool{"model": true, "prompt": true, "size": true, "aspect_ratio": true, "refer_images": true, "n": true}
-	req.Extra = make(map[string]interface{})
-	for k, v := range raw {
-		if !known[k] {
-			req.Extra[k] = v
-		}
-	}
+	req.Extra = copyExtraFields(raw, known)
 	return &req, nil
 }
 
@@ -106,12 +116,7 @@ func bindVideoRequest(bodyBytes []byte) (*model.VideoRequest, error) {
 	var raw map[string]interface{}
 	_ = json.Unmarshal(bodyBytes, &raw)
 	known := map[string]bool{"model": true, "prompt": true, "size": true, "aspect_ratio": true, "duration": true, "refer_images": true, "refer_videos": true}
-	req.Extra = make(map[string]interface{})
-	for k, v := range raw {
-		if !known[k] {
-			req.Extra[k] = v
-		}
-	}
+	req.Extra = copyExtraFields(raw, known)
 	return &req, nil
 }
 
@@ -127,12 +132,7 @@ func bindAudioRequest(bodyBytes []byte) (*model.AudioRequest, error) {
 	var raw map[string]interface{}
 	_ = json.Unmarshal(bodyBytes, &raw)
 	known := map[string]bool{"model": true, "input": true, "voice": true, "duration": true}
-	req.Extra = make(map[string]interface{})
-	for k, v := range raw {
-		if !known[k] {
-			req.Extra[k] = v
-		}
-	}
+	req.Extra = copyExtraFields(raw, known)
 	return &req, nil
 }
 
@@ -504,12 +504,7 @@ func bindMusicRequest(bodyBytes []byte) (*model.MusicRequest, error) {
 		"continue_clip_id": true, "continue_at": true, "cover_clip_id": true,
 		"task": true, "metadata_params": true, "callback_url": true,
 	}
-	req.Extra = make(map[string]interface{})
-	for k, v := range raw {
-		if !known[k] {
-			req.Extra[k] = v
-		}
-	}
+	req.Extra = copyExtraFields(raw, known)
 	return &req, nil
 }
 

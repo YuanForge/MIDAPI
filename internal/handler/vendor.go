@@ -358,7 +358,7 @@ func testKeyAgainstChannel(ctx context.Context, ch *model.Channel, keyValue stri
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+keyValue)
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		// 网络错误无法判断 Key 有效性，允许通过（可能是短暂网络问题）

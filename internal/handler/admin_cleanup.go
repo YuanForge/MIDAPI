@@ -248,7 +248,7 @@ func requireAdminPermission(c *gin.Context, permission string) bool {
 			}
 		}
 	}
-	c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "需要任务管理权限"})
+	c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "权限不足"})
 	return false
 }
 

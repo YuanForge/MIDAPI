@@ -68,6 +68,7 @@ import {
 import { useSiteSettings } from '@/hooks/use-site-settings'
 import { clearRoleToken, getRoleToken, setSiteModePreference } from '@/lib/auth/storage'
 import { userApi } from '@/lib/api/user'
+import { sanitizeCustomHtml } from '@/lib/sanitize-html'
 
 export type NavItem = {
   label: string
@@ -180,6 +181,8 @@ export function ConsoleLayout({
     '/admin/key-pools',
     '/admin/llm-logs',
   ].includes(location.pathname)
+  const safeHeaderHtml = sanitizeCustomHtml(headerHtml)
+  const safeFooterHtml = sanitizeCustomHtml(footerHtml)
 
   // Build nav groups from either `groups` or flat `items`, filter auth-gated when not logged in
   const rawGroups: NavGroup[] = groups ?? (subtitle ? [{ label: subtitle, items }] : [{ items }])
@@ -337,10 +340,10 @@ export function ConsoleLayout({
             )}
           </div>
         </header>
-        {headerHtml ? (
+        {safeHeaderHtml ? (
           <div
             className="border-b border-border/60 bg-card px-4 py-2 text-sm md:px-6"
-            dangerouslySetInnerHTML={{ __html: headerHtml }}
+            dangerouslySetInnerHTML={{ __html: safeHeaderHtml }}
           />
         ) : null}
         <main className={isFullBleedPage ? 'flex-1 px-0 py-0' : 'flex-1 px-4 py-6 md:px-6'}>
@@ -354,10 +357,10 @@ export function ConsoleLayout({
             <Outlet />
           </div>
         </main>
-        {footerHtml ? (
+        {safeFooterHtml ? (
           <footer
             className="border-t border-border/60 bg-background px-4 py-3 text-xs text-muted-foreground md:px-6"
-            dangerouslySetInnerHTML={{ __html: footerHtml }}
+            dangerouslySetInnerHTML={{ __html: safeFooterHtml }}
           />
         ) : null}
       </SidebarInset>

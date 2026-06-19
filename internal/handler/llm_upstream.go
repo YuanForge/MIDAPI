@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"fanapi/internal/model"
+	"fanapi/internal/sanitize"
 	"fanapi/internal/script"
 	"fanapi/internal/upstream"
 
@@ -105,18 +106,17 @@ func sendLLMRequest(c *gin.Context, ch *model.Channel, reqData map[string]interf
 		}
 	}
 
-	// 采集完整请求头（用于管理端日志排查，含完整 API Key）
 	if err := applyChannelAuth(upReq, ch, poolKeyVal, body); err != nil {
 		return nil, nil, err
 	}
 
-	sanitizedHeaders := make(map[string]string, len(upReq.Header))
+	sentHeaders := make(map[string]string, len(upReq.Header))
 	for k, vals := range upReq.Header {
-		sanitizedHeaders[k] = strings.Join(vals, ", ")
+		sentHeaders[k] = strings.Join(vals, ", ")
 	}
 
 	resp, err := httpClient.Do(upReq)
-	return sanitizedHeaders, resp, err
+	return sanitize.RedactStringHeaders(sentHeaders), resp, err
 }
 
 func resolveLLMTargetURL(baseURL, resolvedModel string, isStream bool, responsesOperation string) string {

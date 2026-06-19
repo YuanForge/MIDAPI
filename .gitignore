@@ -32,6 +32,13 @@ config.local.yaml
 
 # Runtime uploads / generated exports
 uploads/
+exports/
+*.pem
+*.key
+id_rsa
+id_dsa
+*.sqlite
+*.sqlite3
 
 # OS
 .DS_Store

@@ -47,6 +47,7 @@ export function useAsync<T>(fetcher: () => Promise<T>, initialData: T, deps: rea
     return () => {
       cancelled = true
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- deps is the explicit caller-provided dependency list for this shared async hook.
   }, [revision, ...deps])
 
   const reload = useCallback(() => setRevision((v) => v + 1), [])

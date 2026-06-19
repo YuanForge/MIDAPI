@@ -81,35 +81,14 @@ psql -U <user> -d <db> -f scripts/seed_chatfire.sql
 
 ### 5. 数据库迁移（非首次部署）
 
-若数据库由旧版升级，需按顺序执行迁移脚本补充新字段（新部署由 xorm `Sync2` 自动处理，无需手动执行）：
+若数据库由旧版升级，需按顺序执行迁移脚本补充新字段、索引和约束；即使新部署会由 xorm `Sync2` 创建基础表结构，仍建议在上线前按顺序执行 `scripts/migrate_*.sql`，确保 PostgreSQL 约束、注释和在线索引完整：
 ```bash
-# 添加 error_script 字段、corr_id 关联字段
-psql -U <user> -d <db> -f scripts/migrate_20260405_add_error_script_corr_id.sql
-
-# 高并发性能索引（使用 CONCURRENTLY，不锁表，可在线执行）
-psql -U <user> -d <db> -f scripts/migrate_20260405_add_indexes.sql
-
-# 支付订单补充字段（apply_time、apply_result 等）
-psql -U <user> -d <db> -f scripts/migrate_20260412_payment_order_apply_fields.sql
-
-# 号池 Key 类型字段（key_type: normal / low_price）
-psql -U <user> -d <db> -f scripts/migrate_20260416_add_key_type.sql
-
-# 渠道图标与描述字段（icon_url、description）
-psql -U <user> -d <db> -f scripts/migrate_20260416_channel_icon_and_desc.sql
-
-# 邀请码 / 号商关联字段（invite_code、agent_id）
-psql -U <user> -d <db> -f scripts/migrate_20260416_invite_agent.sql
-
-# OCPC 转化类型字段
-psql -U <user> -d <db> -f scripts/migrate_20260416_ocpc_conv_types.sql
-
-# 邀请返佣系统（frozen_balance、rebate_ratio、inviter_id 等）
-psql -U <user> -d <db> -f scripts/migrate_20260418_invite_rebate.sql
-
-# 号商表（vendors）及号池 Key 归属关联
-psql -U <user> -d <db> -f scripts/migrate_20260418_vendors.sql
+for f in $(ls scripts/migrate_*.sql | sort); do
+  psql -v ON_ERROR_STOP=1 -U <user> -d <db> -f "$f"
+done
 ```
+
+> 带 `CREATE INDEX CONCURRENTLY` 的脚本不要包在事务里执行；生产大表迁移建议先在 staging 验证耗时。
 
 ## 收钱吧接入自检清单（最小可用）
 

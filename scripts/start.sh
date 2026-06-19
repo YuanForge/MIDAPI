@@ -82,8 +82,12 @@ if curl -sf http://localhost:8080/health >/dev/null 2>&1; then
     echo "  管理端:        http://localhost:3000/admin"
     fi
     echo ""
-    echo "  管理账号:      admin@fanapi.dev   / Admin@2026!"
-  echo "  测试账号:      test@fanapi.dev    / Test@2026!"
+    if awk '/^server:/{f=1;next} f && /seed_default_accounts:/{print $2; exit} /^[^[:space:]]/{f=0}' config.yaml | grep -qi '^true$'; then
+        echo "  管理账号:      admin@fanapi.dev   / Admin@2026!"
+        echo "  测试账号:      test@fanapi.dev    / Test@2026!"
+    else
+        echo "  默认账号:      未启用（server.seed_default_accounts=false）"
+    fi
     echo ""
     echo "  server 日志:   tail -f /tmp/server.log"
     echo "  worker 日志:   tail -f /tmp/script.log"

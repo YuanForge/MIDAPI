@@ -94,10 +94,13 @@ func GetTransactionAggregate(c *gin.Context) {
 
 // POST /admin/transactions/adjust  手动调账
 func AdjustTransaction(c *gin.Context) {
+	if !requireAdminPermission(c, "billing:adjust") {
+		return
+	}
 	var req struct {
 		UserID  int64  `json:"user_id"`
-		Type    string `json:"type"`    // adjust/recharge/refund
-		Credits int64  `json:"credits"` // 正负均可
+		Type    string `json:"type"`    // recharge/adjust
+		Credits int64  `json:"credits"` // recharge 必须为正，adjust 必须为负
 		Reason  string `json:"reason"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -108,15 +111,30 @@ func AdjustTransaction(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "user_id 不能为空"})
 		return
 	}
-	if len(req.Reason) < 5 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "reason 至少 5 个字符"})
+	if len(req.Reason) < 10 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "reason 至少 10 个字符"})
 		return
 	}
 	if req.Type == "" {
-		req.Type = "adjust"
+		req.Type = "recharge"
+	}
+	switch req.Type {
+	case "recharge":
+		if req.Credits <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "补单金额必须大于 0"})
+			return
+		}
+	case "adjust":
+		if req.Credits >= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "冲销金额必须小于 0"})
+			return
+		}
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "不支持的调账类型"})
+		return
 	}
 
-	if err := service.WriteTx(c.Request.Context(), req.UserID, 0, 0, 0, "", "adjust", req.Credits, 0, 0, model.JSON{
+	if err := service.WriteTx(c.Request.Context(), req.UserID, 0, 0, 0, "", req.Type, req.Credits, 0, 0, model.JSON{
 		"reason":   req.Reason,
 		"admin_id": getAdminID(c),
 		"type":     req.Type,

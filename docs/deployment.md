@@ -75,7 +75,7 @@ server:
   jwt_secret: "替换为强随机字符串"
   jwt_expire_hours: 24
   seed_default_accounts: true   # 仅本地开发可临时启用，生产保持 false
-  seed_default_channels: true
+  seed_default_channels: false  # 示例渠道含占位 key，生产建议关闭，配置真实 key 后手动启用渠道
 
 db:
   host: localhost
@@ -295,8 +295,13 @@ docker run -d \
 ```bash
 # 先克隆代码拿到 SQL 脚本（如已克隆可跳过）
 git clone <你的仓库地址> /opt/fanapi
-psql -h 127.0.0.1 -U postgres -d fanapi -f /opt/fanapi/scripts/migrate_*.sql
+cd /opt/fanapi
+for f in $(ls scripts/migrate_*.sql | sort); do
+  psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U postgres -d fanapi -f "$f"
+done
 ```
+
+> 带 `CREATE INDEX CONCURRENTLY` 的脚本不要放进事务块；生产大表迁移前先在 staging 验证耗时和锁等待。
 
 ---
 
@@ -322,7 +327,7 @@ server:
   jwt_secret: "替换为强随机字符串"  # openssl rand -hex 32
   jwt_expire_hours: 24
   seed_default_accounts: false   # 生产保持 false；仅本地/测试首次初始化可临时设 true
-  seed_default_channels: true
+  seed_default_channels: false   # 示例渠道含占位 key，生产建议关闭
 
 db:
   host: host-gateway        # ← 不要写 localhost
@@ -521,7 +526,7 @@ server:
   jwt_secret: "替换为强随机字符串"  # openssl rand -hex 32
   jwt_expire_hours: 24
   seed_default_accounts: false
-  seed_default_channels: true
+  seed_default_channels: false
 
 db:
   host: 数据库地址
@@ -723,7 +728,7 @@ curl http://localhost/health
 | `server.jwt_secret` | JWT 签名密钥，**生产必须替换为强随机字符串**（`openssl rand -hex 32`） |
 | `server.jwt_expire_hours` | JWT 有效期（小时），默认 24 |
 | `server.seed_default_accounts` | 是否在启动时补种内置管理员/测试账号，生产必须保持 `false` |
-| `server.seed_default_channels` | 渠道表为空时是否补种示例渠道，默认 `true` |
+| `server.seed_default_channels` | 渠道表为空时是否补种示例渠道，默认 `false`；示例渠道含占位 key，生产建议关闭 |
 | `db.host` / `db.port` / `db.user` / `db.password` / `db.dbname` | PostgreSQL 连接信息 |
 | `db.sslmode` | PostgreSQL SSL 模式，内网可用 `disable` |
 | `db.max_open_conns` | 最大打开连接数，建议与 pgBouncer pool_size 对齐，0 = 不限 |
@@ -891,12 +896,14 @@ ssh user@your-server "sudo systemctl restart fanapi-server fanapi-script && sudo
 
 ### 数据库迁移
 
-`fanapi-server` 启动时会自动执行 `xorm Sync2` 补充新字段，无需手动操作。
+`fanapi-server` 启动时仍会执行 `xorm Sync2` 补充基础字段，但 PostgreSQL 约束、注释和部分在线索引不应只依赖 `Sync2`。
 
-若升级说明中有额外迁移 SQL，手动执行：
+升级或首次上线前建议按顺序执行迁移 SQL：
 
 ```bash
-psql -U postgres -d fanapi -f scripts/migrate_xxx.sql
+for f in $(ls scripts/migrate_*.sql | sort); do
+  psql -v ON_ERROR_STOP=1 -U postgres -d fanapi -f "$f"
+done
 ```
 
 ---

@@ -282,13 +282,16 @@ func upload360Ocpc(rec *model.OcpcRecord, plat *model.OcpcPlatform, convertType 
 	sig.Write([]byte(plat.E360Secret + postStr))
 	sign := fmt.Sprintf("%x", sig.Sum(nil))
 
-	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost,
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost,
 		"https://convert.dop.360.cn/uploadWebConvert", strings.NewReader(postStr))
 	req.Header.Set("App-Key", plat.E360Key)
 	req.Header.Set("App-Sign", sign)
 	req.Header.Set("Content-Type", "application/json;charset=utf-8")
 
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
 	if err != nil {
 		return false, fmt.Sprintf(`{"error":"%s"}`, err.Error())
 	}

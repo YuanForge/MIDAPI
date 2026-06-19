@@ -82,7 +82,7 @@ func Load() (*Config, error) {
 	v.SetDefault("server.jwt_secret", "")
 	v.SetDefault("server.jwt_expire_hours", 24)
 	v.SetDefault("server.seed_default_accounts", false)
-	v.SetDefault("server.seed_default_channels", true)
+	v.SetDefault("server.seed_default_channels", false)
 	v.SetDefault("db.sslmode", "disable")
 
 	if err := v.ReadInConfig(); err != nil {

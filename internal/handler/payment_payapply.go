@@ -118,7 +118,14 @@ func CreatePayApplyOrder(c *gin.Context) {
 		"pay_from":    req.PayFrom,
 	}
 	body, _ := json.Marshal(payload)
-	resp, err := http.Post(applyURL, "application/json", bytes.NewReader(body)) //nolint
+	client := &http.Client{Timeout: 15 * time.Second}
+	httpReq, err := http.NewRequestWithContext(c.Request.Context(), http.MethodPost, applyURL, bytes.NewReader(body))
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "创建支付中台请求失败: " + err.Error()})
+		return
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "调用支付中台失败: " + err.Error()})
 		return
@@ -213,9 +220,9 @@ func PayApplyNotify(c *gin.Context) {
 		return
 	}
 
-	// 更新订单状态
+	// 原子认领 pending 订单，避免并发回调重复充值。
 	paidAt := time.Now()
-	_, err = db.Engine.ID(order.ID).Cols("status", "trade_no", "pay_flat", "paid_at").Update(&model.PaymentOrder{
+	affected, err := db.Engine.Where("id = ? AND status = 'pending'", order.ID).Cols("status", "trade_no", "pay_flat", "paid_at").Update(&model.PaymentOrder{
 		Status:  "paid",
 		TradeNo: req.AlipayNo,
 		PayFlat: req.PayFlat,
@@ -223,6 +230,10 @@ func PayApplyNotify(c *gin.Context) {
 	})
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"status": false, "msg": "更新订单失败: " + err.Error()})
+		return
+	}
+	if affected == 0 {
+		c.JSON(http.StatusOK, gin.H{"status": true, "msg": "已处理"})
 		return
 	}
 

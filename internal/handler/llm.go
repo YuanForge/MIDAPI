@@ -16,6 +16,7 @@ import (
 	"fanapi/internal/model"
 	"fanapi/internal/notify"
 	"fanapi/internal/protocol"
+	"fanapi/internal/sanitize"
 	"fanapi/internal/script"
 	"fanapi/internal/service"
 	"fanapi/internal/upstream"
@@ -683,7 +684,7 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 			}
 			return "http"
 		}(),
-		UpstreamURL:     upstreamURL,
+		UpstreamURL:     sanitize.RedactURL(upstreamURL),
 		UpstreamMethod:  upstreamMethod,
 		UpstreamRequest: model.JSON(mappedReq),
 		ClientRequest:   model.JSON(origReqData), // 用户原始请求（协议转换前）

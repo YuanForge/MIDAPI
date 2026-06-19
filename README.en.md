@@ -76,13 +76,15 @@ psql -U <user> -d <db> -f scripts/seed_chatfire.sql
 
 ### 5. Database migration (upgrades only)
 
-New deployments are handled automatically via xorm `Sync2`. For upgrades from older versions:
+For upgrades from older versions, run migration scripts in order. New deployments still use xorm `Sync2` for base tables, but the SQL migrations add PostgreSQL-specific constraints, comments, and online indexes that `Sync2` does not fully express:
 
 ```bash
-psql -U <user> -d <db> -f scripts/migrate_20260405_add_indexes.sql
+for f in $(ls scripts/migrate_*.sql | sort); do
+  psql -v ON_ERROR_STOP=1 -U <user> -d <db> -f "$f"
+done
 ```
 
-The index migration uses `CONCURRENTLY` and is safe to run on a live database.
+Scripts that use `CREATE INDEX CONCURRENTLY` must not be wrapped in a transaction. Validate production-size migrations in staging first.
 
 ## Channel Script System
 

@@ -313,7 +313,7 @@ func GenerateAPIKey(ctx context.Context, userID int64, name, keyType, secret str
 func LookupAPIKey(ctx context.Context, rawKey string) (*model.APIKey, error) {
 	h := sha256.Sum256([]byte(rawKey))
 	keyHash := hex.EncodeToString(h[:])
-	cacheKey := fmt.Sprintf("apikey2:%s", keyHash)
+	cacheKey := APIKeyCacheKey(keyHash)
 
 	// 先查 Redis 缓存（存储完整 APIKey JSON）
 	cached, err := cache.Client.Get(ctx, cacheKey).Bytes()
@@ -344,4 +344,25 @@ func LookupAPIKey(ctx context.Context, rawKey string) (*model.APIKey, error) {
 	apiKey.LastUsedAt = &now
 	db.Engine.Where("id = ?", apiKey.ID).Cols("last_used_at").Update(apiKey)
 	return apiKey, nil
+}
+
+func APIKeyCacheKey(keyHash string) string {
+	return fmt.Sprintf("apikey2:%s", keyHash)
+}
+
+func InvalidateAPIKeyCache(ctx context.Context, keyHash string) {
+	keyHash = strings.TrimSpace(keyHash)
+	if keyHash == "" {
+		return
+	}
+	if err := cache.Client.Del(ctx, APIKeyCacheKey(keyHash)).Err(); err != nil {
+		log.Printf("[apikey] cache invalidation failed hash_prefix=%s err=%v", keyHashPrefix(keyHash), err)
+	}
+}
+
+func keyHashPrefix(keyHash string) string {
+	if len(keyHash) <= 12 {
+		return keyHash
+	}
+	return keyHash[:12]
 }

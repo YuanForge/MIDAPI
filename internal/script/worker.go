@@ -9,9 +9,10 @@ import (
 	"log"
 	"mime"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/textproto"
-	"os"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"time"
@@ -20,13 +21,17 @@ import (
 	"fanapi/internal/model"
 	"fanapi/internal/mq"
 	"fanapi/internal/notify"
+	"fanapi/internal/sanitize"
 	"fanapi/internal/service"
 	"fanapi/internal/upstream"
 
 	"github.com/nats-io/nats.go"
 )
 
-const maxUpstreamNetworkAttempts = 2
+const (
+	maxUpstreamNetworkAttempts = 2
+	maxUploadSourceBytes       = 25 * 1024 * 1024
+)
 
 var upstreamHTTPTransport = func() *http.Transport {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
@@ -47,10 +52,6 @@ var upstreamHTTPTransport = func() *http.Transport {
 //	    - "task.video.*"
 //	    - "task.audio.*"
 func StartWorkers(cfg config.WorkerConfig) error {
-	// 清理上次运行遗留的失效 Consumer，再进行订阅。
-	// 只应在 Worker 进程中运行——如在服务器进程中运行会杀死服务器的 result-proc Consumer。
-	mq.PurgeConsumers()
-
 	if cfg.MaxConcurrent > 0 {
 		log.Printf("[script worker] max concurrent tasks: %d", cfg.MaxConcurrent)
 	}
@@ -178,10 +179,10 @@ func execJob(ctx context.Context, job *model.TaskJob) *model.WorkerResult {
 		}
 		targetURLForLog = ResolveHeaderValue(targetURLForLog, job.PoolKeyValue)
 	}
-	upstreamReq["_url"] = targetURLForLog
+	upstreamReq["_url"] = sanitize.RedactURL(targetURLForLog)
 	upstreamReq["_method"] = job.Method
 	upstreamReq["_initial_request"] = initialReq
-	// 合并渠道配置的请求头（完整替换后记录，含完整 Key）
+	// 合并渠道配置的请求头，写日志前统一脱敏。
 	headersForLog := make(map[string]interface{})
 	for k, v := range job.Headers {
 		if sv, ok := v.(string); ok {
@@ -191,8 +192,8 @@ func execJob(ctx context.Context, job *model.TaskJob) *model.WorkerResult {
 		}
 	}
 	headersForLog["Content-Type"] = "application/json"
-	upstreamReq["_headers"] = headersForLog
-	base.UpstreamRequest = upstreamReq
+	upstreamReq["_headers"] = sanitize.RedactHeaderMap(headersForLog)
+	base.UpstreamRequest = sanitize.RedactJSONMap(upstreamReq)
 
 	// 调用上游 HTTP
 	respData, statusCode, err := callUpstream(job, payload)
@@ -565,37 +566,83 @@ func readUploadSource(src string) ([]byte, string, string, error) {
 	if src == "" {
 		return nil, "", "", fmt.Errorf("empty source")
 	}
-	if strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://") {
-		resp, err := http.Get(src)
-		if err != nil {
-			return nil, "", "", err
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			b, _ := io.ReadAll(resp.Body)
-			return nil, "", "", fmt.Errorf("download failed: %s", string(b))
-		}
-		data, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, "", "", err
-		}
-		fileName := filenameFromURL(src)
-		if fileName == "" {
-			fileName = "upload"
-		}
-		return data, fileName, resp.Header.Get("Content-Type"), nil
-	}
-
-	localPath := strings.TrimPrefix(src, "/")
-	data, err := os.ReadFile(localPath)
+	parsed, err := validateRemoteUploadSource(src)
 	if err != nil {
 		return nil, "", "", err
 	}
-	fileName := filepath.Base(localPath)
-	if fileName == "" || fileName == "." || fileName == string(filepath.Separator) {
+	client := &http.Client{Timeout: 30 * time.Second}
+	req, err := http.NewRequest(http.MethodGet, parsed.String(), nil)
+	if err != nil {
+		return nil, "", "", err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, "", "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, "", "", fmt.Errorf("download failed: %s", string(b))
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxUploadSourceBytes+1))
+	if err != nil {
+		return nil, "", "", err
+	}
+	if len(data) > maxUploadSourceBytes {
+		return nil, "", "", fmt.Errorf("remote file exceeds %d bytes", maxUploadSourceBytes)
+	}
+	fileName := filenameFromURL(parsed.String())
+	if fileName == "" {
 		fileName = "upload"
 	}
-	return data, fileName, mime.TypeByExtension(strings.ToLower(filepath.Ext(fileName))), nil
+	return data, fileName, resp.Header.Get("Content-Type"), nil
+}
+
+func validateRemoteUploadSource(src string) (*url.URL, error) {
+	parsed, err := url.Parse(src)
+	if err != nil {
+		return nil, err
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return nil, fmt.Errorf("upload source must be http or https")
+	}
+	if parsed.User != nil {
+		return nil, fmt.Errorf("upload source must not include user info")
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		return nil, fmt.Errorf("upload source host is empty")
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if isBlockedUploadSourceIP(ip) {
+			return nil, fmt.Errorf("upload source resolves to private or local address")
+		}
+		return parsed, nil
+	}
+	addrs, err := net.DefaultResolver.LookupIPAddr(context.Background(), host)
+	if err != nil {
+		return nil, err
+	}
+	if len(addrs) == 0 {
+		return nil, fmt.Errorf("upload source host has no address")
+	}
+	for _, addr := range addrs {
+		if isBlockedUploadSourceIP(addr.IP) {
+			return nil, fmt.Errorf("upload source resolves to private or local address")
+		}
+	}
+	return parsed, nil
+}
+
+func isBlockedUploadSourceIP(ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	return ip.IsLoopback() ||
+		ip.IsPrivate() ||
+		ip.IsLinkLocalMulticast() ||
+		ip.IsLinkLocalUnicast() ||
+		ip.IsUnspecified()
 }
 
 func filenameFromURL(rawURL string) string {

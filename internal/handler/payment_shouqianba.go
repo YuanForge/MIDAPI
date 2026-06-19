@@ -128,11 +128,12 @@ func CreateShouqianbaOrder(c *gin.Context) {
 	auth := terminalSN + " " + fmt.Sprintf("%x", sign)
 
 	requestURL := strings.TrimRight(apiDomain, "/") + "/upay/v2/precreate"
-	httpReq, _ := http.NewRequest(http.MethodPost, requestURL, bytes.NewReader(body))
+	httpReq, _ := http.NewRequestWithContext(c.Request.Context(), http.MethodPost, requestURL, bytes.NewReader(body))
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", auth)
 
-	httpResp, err := http.DefaultClient.Do(httpReq)
+	client := &http.Client{Timeout: 15 * time.Second}
+	httpResp, err := client.Do(httpReq)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "调用收钱吧失败: " + err.Error()})
 		return

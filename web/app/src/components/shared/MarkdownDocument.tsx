@@ -198,30 +198,31 @@ function renderInlineTokens(text: string, keyPrefix: string) {
           {token.slice(1, -1)}
         </code>,
       )
-    } else if (token.startsWith('[')) {
-      const linkMatch = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/)
-      if (linkMatch) {
-        nodes.push(
-          <a
-            key={`${keyPrefix}-link-${match.index}`}
-            href={linkMatch[2]}
-            target="_blank"
-            rel="noreferrer"
-            className="text-primary underline underline-offset-4"
-          >
-            {linkMatch[1]}
-          </a>,
-        )
-      } else {
-        nodes.push(token)
-      }
+	    } else if (token.startsWith('[')) {
+	      const linkMatch = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/)
+	      if (linkMatch) {
+	        const href = safeMarkdownHref(linkMatch[2])
+	        nodes.push(href ? (
+	          <a
+	            key={`${keyPrefix}-link-${match.index}`}
+	            href={href}
+	            target="_blank"
+	            rel="noopener noreferrer"
+	            className="text-primary underline underline-offset-4"
+	          >
+	            {linkMatch[1]}
+	          </a>
+	        ) : linkMatch[1])
+	      } else {
+	        nodes.push(token)
+	      }
     } else {
       nodes.push(
         <a
           key={`${keyPrefix}-url-${match.index}`}
           href={token}
           target="_blank"
-          rel="noreferrer"
+          rel="noopener noreferrer"
           className="text-primary underline underline-offset-4"
         >
           {token}
@@ -237,6 +238,19 @@ function renderInlineTokens(text: string, keyPrefix: string) {
   }
 
   return nodes
+}
+
+function safeMarkdownHref(rawHref: string) {
+  const href = rawHref.trim()
+  try {
+    const parsed = new URL(href, window.location.origin)
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:' || parsed.protocol === 'mailto:') {
+      return href
+    }
+  } catch {
+    return null
+  }
+  return null
 }
 
 function renderInline(text: string, keyPrefix: string) {

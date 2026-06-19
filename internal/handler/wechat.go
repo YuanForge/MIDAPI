@@ -76,7 +76,13 @@ func (h *WechatHandler) Callback(c *gin.Context) {
 		"https://api.weixin.qq.com/sns/oauth2/access_token?appid=%s&secret=%s&code=%s&grant_type=authorization_code",
 		appid, secret, code,
 	)
-	resp, err := http.Get(tokenURL) //nolint:noctx
+	client := &http.Client{Timeout: 10 * time.Second}
+	tokenReq, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, tokenURL, nil)
+	if err != nil {
+		c.String(http.StatusBadGateway, "微信授权失败")
+		return
+	}
+	resp, err := client.Do(tokenReq)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		c.String(http.StatusBadGateway, "微信授权失败")
 		return
@@ -101,14 +107,20 @@ func (h *WechatHandler) Callback(c *gin.Context) {
 		"https://api.weixin.qq.com/sns/userinfo?access_token=%s&openid=%s&lang=zh_CN",
 		tokenResp.AccessToken, tokenResp.OpenID,
 	)
-	if infoResp, err := http.Get(infoURL); err == nil { //nolint:noctx
-		defer infoResp.Body.Close()
-		var info struct {
-			Nickname string `json:"nickname"`
+	if infoReq, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, infoURL, nil); err == nil {
+		infoResp, err := client.Do(infoReq)
+		if err != nil {
+			infoResp = nil
 		}
-		if b, err := io.ReadAll(infoResp.Body); err == nil {
-			json.Unmarshal(b, &info) //nolint:errcheck
-			nickname = info.Nickname
+		if infoResp != nil {
+			defer infoResp.Body.Close()
+			var info struct {
+				Nickname string `json:"nickname"`
+			}
+			if b, err := io.ReadAll(infoResp.Body); err == nil {
+				json.Unmarshal(b, &info) //nolint:errcheck
+				nickname = info.Nickname
+			}
 		}
 	}
 

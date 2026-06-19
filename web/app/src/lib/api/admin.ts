@@ -776,6 +776,8 @@ export const adminApi = {
     http.get<{ tasks: AdminExportTask[] }>('/admin/exports'),
   createExportTask: (payload: { name: string; type: string; params: Record<string, unknown> }) =>
     http.post<AdminExportTask>('/admin/exports', payload),
+  downloadExportTask: (id: number) =>
+    http.get<Blob>(`/admin/exports/${id}/download`, { responseType: 'blob' }),
   // 上游平台
   listUpstreamPlatforms: () =>
     http.get<{ platforms: AdminUpstreamPlatform[] }>('/admin/upstream-platforms'),

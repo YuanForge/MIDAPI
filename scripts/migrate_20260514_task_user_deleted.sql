@@ -2,4 +2,4 @@
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS user_deleted BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- 为过滤提速
-CREATE INDEX IF NOT EXISTS idx_tasks_user_deleted ON tasks (user_id, user_deleted);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_tasks_user_deleted ON tasks (user_id, user_deleted);

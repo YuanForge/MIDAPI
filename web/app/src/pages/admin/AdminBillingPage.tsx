@@ -72,6 +72,13 @@ export function AdminBillingPage() {
   const [exportMonth, setExportMonth] = useState(() => new Date().toISOString().slice(0, 7))
   const [exporting, setExporting] = useState(false)
 
+  const { data: me } = useAsync(
+    () => adminApi.getAdminMe(),
+    null,
+  )
+  const permissions = me?.permissions ?? []
+  const canAdjust = permissions.includes('*') || permissions.includes('billing:adjust')
+
   const { data, loading, error, reload } = useAsync(async () => {
     const res = await adminApi.listTransactions(searchParams)
     const transactions = Array.isArray(res) ? res : res.transactions ?? res.items ?? []
@@ -114,7 +121,7 @@ export function AdminBillingPage() {
     return adminApi.getTransactionAggregate({ dim: aggDim })
   }, { rows: [] as { key: string; revenue: number; cost: number; profit: number; calls: number }[] }, [aggDim])
 
-  async function submitAdjust() {
+	async function submitAdjust() {
     if (!adjustForm.user_id || !adjustForm.credits || !adjustForm.reason) {
       setAdjustError('请填写所有必填字段')
       return
@@ -123,13 +130,20 @@ export function AdminBillingPage() {
       setAdjustError('调账原因至少 10 个字符')
       return
     }
+    const amountCNY = Number(adjustForm.credits)
+    if (!Number.isFinite(amountCNY) || amountCNY <= 0) {
+      setAdjustError('金额必须大于 0')
+      return
+    }
+    const credits = Math.round(amountCNY * 1_000_000)
+    const signedCredits = adjustForm.type === 'adjust' ? -credits : credits
     setAdjustError('')
     setAdjusting(true)
     try {
       await adminApi.adjustTransaction({
         user_id: Number(adjustForm.user_id),
         type: adjustForm.type,
-        credits: Number(adjustForm.credits),
+        credits: signedCredits,
         reason: adjustForm.reason,
       })
       setAdjustOpen(false)
@@ -183,9 +197,11 @@ export function AdminBillingPage() {
             <Button size="sm" variant="outline" onClick={submitExport} disabled={exporting}>
               {exporting ? '提交中…' : '导出对账单'}
             </Button>
-            <Button size="sm" onClick={() => { setAdjustForm({ user_id: '', type: 'recharge', credits: '', reason: '' }); setAdjustError(''); setAdjustOpen(true) }}>
-              手动调账
-            </Button>
+            {canAdjust ? (
+              <Button size="sm" onClick={() => { setAdjustForm({ user_id: '', type: 'recharge', credits: '', reason: '' }); setAdjustError(''); setAdjustOpen(true) }}>
+                手动调账
+              </Button>
+            ) : null}
           </div>
         }
       />

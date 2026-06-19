@@ -12,13 +12,6 @@ import (
 // Admin checks that the authenticated user has the "admin" role.
 func Admin() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// If JWT, role is already in context
-		if role, exists := c.Get("role"); exists && role == "admin" {
-			c.Next()
-			return
-		}
-
-		// If API key auth, load role from DB
 		userID, exists := c.Get("user_id")
 		if !exists {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "无访问权限"})
@@ -39,13 +32,6 @@ func Admin() gin.HandlerFunc {
 // AdminOrOperator allows both "admin" and "operator" roles.
 func AdminOrOperator() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if role, exists := c.Get("role"); exists {
-			if role == "admin" || role == "operator" {
-				c.Next()
-				return
-			}
-		}
-
 		userID, exists := c.Get("user_id")
 		if !exists {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "无访问权限"})
