@@ -499,6 +499,8 @@ export type AdminCoupon = {
 }
 
 export type AdminPaymentOrder = {
+  source?: 'payment' | 'card'
+  source_id?: number
   id?: number
   user_id?: number
   user_email?: string
@@ -510,8 +512,29 @@ export type AdminPaymentOrder = {
   pay_flat?: number
   pay_channel?: string
   pay_from?: string
+  event_time?: string
   created_at?: string
   paid_at?: string
+  card_code?: string
+  note?: string
+  gross_profit?: number
+}
+
+export type AdminPaymentSummary = {
+  gross_profit?: number
+  payment_gross_profit?: number
+  card_gross_profit?: number
+  paid_count?: number
+  card_count?: number
+}
+
+export type AdminPaymentDailySummary = {
+  day?: string
+  gross_profit?: number
+  payment_gross_profit?: number
+  card_gross_profit?: number
+  count?: number
+  card_count?: number
 }
 
 export type AdminRiskLabel = {
@@ -800,7 +823,7 @@ export const adminApi = {
     http.get<{ uses: { id?: number; coupon_id?: number; user_id?: number; discount?: number; created_at?: string }[] }>(`/admin/coupons/${id}/uses`),
   // 客户充值明细
   listPaymentOrders: (params: Record<string, unknown> = {}) =>
-    http.get<{ orders: AdminPaymentOrder[]; total: number }>('/admin/payments', { params }),
+    http.get<{ orders: AdminPaymentOrder[]; total: number; summary?: AdminPaymentSummary; daily?: AdminPaymentDailySummary[] }>('/admin/payments', { params }),
   // 系统设置操作日志
   listSettingLogs: () =>
     http.get<{ logs: AdminAuditLog[] }>('/admin/settings/logs'),

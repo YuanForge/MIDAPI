@@ -310,6 +310,12 @@ func ensureIndexes() error {
 			WHERE status = 'used'`,
 		},
 		{
+			"idx_cards_status_used_at",
+			`CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_cards_status_used_at
+			ON cards (status, used_at DESC, id DESC)
+			WHERE status = 'used'`,
+		},
+		{
 			"idx_cards_batch_status",
 			`CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_cards_batch_status
 			ON cards (batch_id, status)
