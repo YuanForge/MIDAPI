@@ -15,9 +15,26 @@ import (
 	"xorm.io/xorm"
 )
 
+// Quota leases are the bridge between durable DB balance and fast per-request
+// charging:
+//
+//   - users.balance is the durable free balance that has not been moved into a
+//     short-lived spending bucket yet.
+//   - billing_quota_leases records the DB-side mirror of credits moved out of
+//     users.balance. Multiple active rows for one user are valid; they are
+//     summed when rebuilding Redis and debited by earliest expiry first.
+//   - billing:quota:<userID> is the hot Redis bucket. Request charging decrements
+//     it first so high-concurrency requests fail fast and atomically.
+//
+// The normal flow is Charge -> Redis decrement -> service.WriteTx ->
+// ApplyQuotaLeaseTx. Reclaims move unused expired lease credits back to
+// users.balance.
 const quotaKeyFmt = "billing:quota:%d"
 const quotaVersionKeyFmt = "billing:quota_version:%d"
 const quotaLeaseLockNamespace int64 = 20260618
+
+// Bump this when Redis quota semantics change. Old or unversioned keys are
+// rebuilt from billing_quota_leases before being trusted.
 const quotaCacheVersion = "2"
 
 var quotaLeaseTTL = 30 * time.Minute
@@ -51,6 +68,8 @@ func quotaCacheIsCurrent(ctx context.Context, userID int64) bool {
 	return err == nil && val == quotaCacheVersion
 }
 
+// currentCachedQuota returns only versioned Redis quota. If the version key is
+// missing or stale, callers must rebuild from DB before showing or spending it.
 func currentCachedQuota(ctx context.Context, userID int64) (int64, bool, error) {
 	if !quotaCacheIsCurrent(ctx, userID) {
 		return 0, false, nil
@@ -69,6 +88,9 @@ func quotaLeaseExpiresAt() time.Time {
 	return time.Now().Add(quotaLeaseTTL)
 }
 
+// quotaReserveNeeded returns the extra DB balance that must be moved into the
+// hot quota bucket. The "available" value must be Redis-visible quota, not a DB
+// lease sum, otherwise a stale Redis bucket can still fail during Charge.
 func quotaReserveNeeded(required, activeRemaining int64) int64 {
 	if required <= activeRemaining {
 		return 0
@@ -81,6 +103,8 @@ type quotaLeaseDebit struct {
 	Amount int64
 }
 
+// quotaLeaseDebitPlan spreads one persisted charge across all active lease rows.
+// This intentionally supports multiple active leases for the same user.
 func quotaLeaseDebitPlan(leases []model.BillingQuotaLease, credits int64) ([]quotaLeaseDebit, bool) {
 	if credits <= 0 {
 		return nil, true
@@ -104,6 +128,9 @@ func quotaLeaseDebitPlan(leases []model.BillingQuotaLease, credits int64) ([]quo
 	return plan, remaining == 0
 }
 
+// reserveQuota moves only the missing amount from users.balance into both the DB
+// lease mirror and the Redis quota bucket. The DB part commits first; if Redis
+// fails, releaseReservedQuota puts the reserve back.
 func reserveQuota(ctx context.Context, userID, required, available int64, reason string) error {
 	if required <= 0 {
 		return nil
@@ -195,6 +222,8 @@ func reserveQuota(ctx context.Context, userID, required, available int64, reason
 	return nil
 }
 
+// releaseReservedQuota undoes a reserve that was written to DB but never made it
+// into Redis. It is deliberately limited to reserve rollback, not normal refund.
 func releaseReservedQuota(ctx context.Context, userID, credits int64, reason string) error {
 	if credits <= 0 {
 		return nil
@@ -251,6 +280,8 @@ SELECT release_amount FROM updated_lease`, credits, userID)
 	return nil
 }
 
+// quotaRemaining is the authoritative read for spendable hot quota. A missing or
+// stale Redis key is rebuilt from every active DB lease before use.
 func quotaRemaining(ctx context.Context, userID int64) (int64, error) {
 	val, err := cache.Client.Get(ctx, quotaKey(userID)).Int64()
 	if err == nil {
@@ -265,7 +296,8 @@ func quotaRemaining(ctx context.Context, userID int64) (int64, error) {
 	return SyncQuotaToRedis(ctx, userID)
 }
 
-// SyncQuotaToRedis rebuilds the hot quota key from all active DB leases.
+// SyncQuotaToRedis rebuilds the hot quota key from all active DB leases. The TTL
+// follows the earliest expiring lease so Redis never outlives the DB authority.
 func SyncQuotaToRedis(ctx context.Context, userID int64) (int64, error) {
 	var rows []struct {
 		RemainingCredits int64     `xorm:"remaining_credits"`
@@ -313,6 +345,9 @@ ORDER BY expires_at ASC, id ASC`, userID).Find(&rows); err != nil {
 	return total, nil
 }
 
+// ensureQuota guarantees that the next Redis charge can see at least credits.
+// It reserves only the gap, which prevents DB lease sums from hiding a short
+// Redis bucket.
 func ensureQuota(ctx context.Context, userID, credits int64) error {
 	if credits <= 0 {
 		return nil
@@ -327,6 +362,8 @@ func ensureQuota(ctx context.Context, userID, credits int64) error {
 	return reserveQuota(ctx, userID, credits, remaining, "charge")
 }
 
+// ensureRefundQuotaLease gives refunds a DB lease row to mirror into even when
+// the original active lease already expired.
 func ensureRefundQuotaLease(ctx context.Context, userID int64) error {
 	var lease model.BillingQuotaLease
 	found, err := db.Engine.Where("user_id = ? AND status = ? AND expires_at > ?", userID, "active", time.Now()).Desc("id").Get(&lease)
@@ -369,7 +406,8 @@ func ensureRefundQuotaLease(ctx context.Context, userID int64) error {
 }
 
 // ApplyQuotaDelta compensates Redis quota after a pre-applied charge/refund
-// transaction fails to persist.
+// transaction fails to persist. It only touches Redis; the failed DB transaction
+// already rolled back the lease mirror.
 func ApplyQuotaDelta(ctx context.Context, userID, delta int64) error {
 	if delta == 0 {
 		return nil
@@ -432,6 +470,8 @@ func ReleasePreAppliedQuota(ctx context.Context, userID, credits int64) error {
 }
 
 // ApplyQuotaLeaseTx mirrors a persisted billing transaction into the DB lease.
+// Charges/holds/settles debit all active lease rows by expiry order; refunds add
+// back to the newest active row or create a refund row when needed.
 func ApplyQuotaLeaseTx(sess *xorm.Session, userID int64, txType string, generalCredits int64) error {
 	if userID <= 0 || generalCredits <= 0 {
 		return nil
@@ -503,7 +543,9 @@ RETURNING remaining_credits`, generalCredits, expiresAt, userID)
 	return nil
 }
 
-// SpendableBalance returns free DB balance plus active authorized quota.
+// SpendableBalance returns free DB balance plus active authorized quota. If a
+// current Redis quota bucket exists, it is used instead of the DB lease sum so
+// the balance shown to users tracks what Charge can actually spend.
 func SpendableBalance(ctx context.Context, userID int64) (int64, error) {
 	var row struct {
 		Balance     int64 `xorm:"balance"`
@@ -530,6 +572,8 @@ WHERE u.id = $1`, userID).Get(&row)
 	return row.Balance + row.ActiveLease, nil
 }
 
+// SpendableBalanceTx is the transactional DB-only snapshot used while writing a
+// billing transaction. It cannot safely read Redis from inside the DB transaction.
 func SpendableBalanceTx(sess *xorm.Session, userID int64) (int64, error) {
 	rows, err := sess.QueryString(`
 SELECT u.balance + COALESCE((
@@ -556,6 +600,8 @@ func InvalidateBalanceCache(ctx context.Context, userID int64) {
 	_ = cache.Client.Del(ctx, balanceKey(userID)).Err()
 }
 
+// ReclaimExpiredQuotaLeases returns unused, expired quota from lease rows to
+// users.balance after a short grace window.
 func ReclaimExpiredQuotaLeases(ctx context.Context, limit int) (int, error) {
 	if limit <= 0 {
 		limit = 100
