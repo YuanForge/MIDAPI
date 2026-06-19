@@ -19,7 +19,7 @@ function asyncReduce<T>(state: AsyncState<T>, action: AsyncAction<T>): AsyncStat
   }
 }
 
-export function useAsync<T>(fetcher: () => Promise<T>, initialData: T, deps: any[] = []) {
+export function useAsync<T>(fetcher: () => Promise<T>, initialData: T, deps: readonly unknown[] = []) {
   const [state, dispatch] = useReducer(
     (s: AsyncState<T>, a: AsyncAction<T>) => asyncReduce(s, a),
     { data: initialData, loading: true, error: '' },
@@ -47,6 +47,7 @@ export function useAsync<T>(fetcher: () => Promise<T>, initialData: T, deps: any
     return () => {
       cancelled = true
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- deps is the explicit caller-provided dependency list for this shared async hook.
   }, [revision, ...deps])
 
   const reload = useCallback(() => setRevision((v) => v + 1), [])

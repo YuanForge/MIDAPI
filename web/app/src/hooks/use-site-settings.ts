@@ -62,32 +62,48 @@ export function useSiteSettings() {
       try {
         const response = await publicApi.getSettings()
         const maybeSettings = (response as { settings?: unknown }).settings
-        const record =
+        const record: Record<string, unknown> =
           maybeSettings && typeof maybeSettings === 'object'
-            ? (maybeSettings as Record<string, any>)
-            : (response as Record<string, any>)
+            ? (maybeSettings as Record<string, unknown>)
+            : (response as Record<string, unknown>)
+        const getString = (key: string) => (typeof record[key] === 'string' ? record[key] : '')
+        const getBoolean = (key: string, defaultValue: boolean) => {
+          const value = record[key]
+          if (typeof value === 'boolean') return value
+          if (typeof value === 'string') {
+            if (value === 'true') return true
+            if (value === 'false') return false
+          }
+          return defaultValue
+        }
+        const parsePlans = (raw: string): Plan[] => {
+          try {
+            const parsed = JSON.parse(raw || '[]')
+            return Array.isArray(parsed) ? parsed : []
+          } catch {
+            return []
+          }
+        }
         setSettings({
-          siteName: record.site_name || 'MidCode',
-          logoUrl: record.logo_url || '',
-          tutorialMarkdown: record.tutorial_markdown || '',
-          plans: (() => {
-            try { return JSON.parse(record.recharge_plans || '[]') } catch { return [] }
-          })(),
-          epayEnabled: record.epay_enabled === 'true',
-          payApplyEnabled: record.pay_apply_enabled === 'true',
-          shouqianbaEnabled: record.shouqianba_enabled === 'true',
-          wechatPayEnabled: record.wechat_pay_enabled !== 'false',
-          alipayEnabled: record.alipay_enabled !== 'false',
-          allowCustom: record.recharge_allow_custom !== 'false',
-          noticeTitle: record.notice_title || '',
-          noticeContent: record.notice_content || '',
-          contactInfo: record.contact_info || '',
-          qqGroupUrl: record.qq_group_url || '',
-          wechatCsUrl: record.wechat_cs_url || '',
-          qrCodeUrl: record.qrcode_url || '',
-          headerHtml: record.header_html || '',
-          footerHtml: record.footer_html || '',
-          showLowPriceKey: record.show_low_price_key !== 'false',
+          siteName: getString('site_name') || 'MidCode',
+          logoUrl: getString('logo_url'),
+          tutorialMarkdown: getString('tutorial_markdown'),
+          plans: parsePlans(getString('recharge_plans')),
+          epayEnabled: getBoolean('epay_enabled', false),
+          payApplyEnabled: getBoolean('pay_apply_enabled', false),
+          shouqianbaEnabled: getBoolean('shouqianba_enabled', false),
+          wechatPayEnabled: getBoolean('wechat_pay_enabled', true),
+          alipayEnabled: getBoolean('alipay_enabled', true),
+          allowCustom: getBoolean('recharge_allow_custom', true),
+          noticeTitle: getString('notice_title'),
+          noticeContent: getString('notice_content'),
+          contactInfo: getString('contact_info'),
+          qqGroupUrl: getString('qq_group_url'),
+          wechatCsUrl: getString('wechat_cs_url'),
+          qrCodeUrl: getString('qrcode_url'),
+          headerHtml: getString('header_html'),
+          footerHtml: getString('footer_html'),
+          showLowPriceKey: getBoolean('show_low_price_key', true),
         })
       } catch {
         setSettings(defaultSettings)

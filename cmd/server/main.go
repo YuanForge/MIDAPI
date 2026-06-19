@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 
 	_ "fanapi/docs"
 	"fanapi/internal/billing"
@@ -36,7 +37,11 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 
-	if err := db.Init(&cfg.DB, true); err != nil {
+	if err := db.Init(&cfg.DB, db.InitOptions{
+		Migrate:             true,
+		SeedDefaultAccounts: cfg.Server.SeedDefaultAccounts,
+		SeedDefaultChannels: cfg.Server.SeedDefaultChannels,
+	}); err != nil {
 		log.Fatalf("db: %v", err)
 	}
 	log.Println("db connected")
@@ -91,7 +96,17 @@ func main() {
 	r := gin.New()
 	r.Use(gin.Logger())
 	r.Use(gin.Recovery())
-	r.Static("/uploads", "uploads")
+	r.Use(func(c *gin.Context) {
+		if strings.HasPrefix(c.Request.URL.Path, "/uploads/") {
+			c.Header("X-Content-Type-Options", "nosniff")
+		}
+		c.Next()
+	})
+	r.Static("/uploads/reference", "uploads/reference")
+	r.Static("/uploads/channel-icons", "uploads/channel-icons")
+	r.Static("/uploads/site-settings", "uploads/site-settings")
+	r.Static("/uploads/payment-qr", "uploads/payment-qr")
+	r.Static("/uploads/reference-videos", "uploads/reference-videos")
 
 	// 健康检查（无需认证）
 	r.GET("/health", func(c *gin.Context) { c.JSON(200, gin.H{"status": "ok"}) })
@@ -297,6 +312,7 @@ func main() {
 			// 数据导出中心
 			admin.GET("/exports", handler.ListExportTasks)
 			admin.POST("/exports", handler.CreateExportTask)
+			admin.GET("/exports/:id/download", handler.DownloadExportTask)
 
 			// 上游平台管理
 			admin.GET("/upstream-platforms", handler.ListUpstreamPlatforms)

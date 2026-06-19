@@ -1,6 +1,9 @@
 package config
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/spf13/viper"
 )
 
@@ -14,9 +17,11 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Port           int    `mapstructure:"port"`
-	JWTSecret      string `mapstructure:"jwt_secret"`
-	JWTExpireHours int    `mapstructure:"jwt_expire_hours"`
+	Port                int    `mapstructure:"port"`
+	JWTSecret           string `mapstructure:"jwt_secret"`
+	JWTExpireHours      int    `mapstructure:"jwt_expire_hours"`
+	SeedDefaultAccounts bool   `mapstructure:"seed_default_accounts"`
+	SeedDefaultChannels bool   `mapstructure:"seed_default_channels"`
 }
 
 type DBConfig struct {
@@ -65,19 +70,54 @@ type SMTPConfig struct {
 }
 
 func Load() (*Config, error) {
-	viper.SetConfigName("config")
-	viper.SetConfigType("yaml")
-	viper.AddConfigPath(".")
-	viper.AddConfigPath("/app")
-	viper.AutomaticEnv()
+	v := viper.New()
+	v.SetConfigName("config")
+	v.SetConfigType("yaml")
+	v.AddConfigPath(".")
+	v.AddConfigPath("/app")
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	v.AutomaticEnv()
 
-	if err := viper.ReadInConfig(); err != nil {
+	v.SetDefault("server.port", 8080)
+	v.SetDefault("server.jwt_secret", "")
+	v.SetDefault("server.jwt_expire_hours", 24)
+	v.SetDefault("server.seed_default_accounts", false)
+	v.SetDefault("server.seed_default_channels", false)
+	v.SetDefault("db.sslmode", "disable")
+
+	if err := v.ReadInConfig(); err != nil {
 		return nil, err
 	}
 
 	var cfg Config
-	if err := viper.Unmarshal(&cfg); err != nil {
+	if err := v.Unmarshal(&cfg); err != nil {
+		return nil, err
+	}
+	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+func (cfg *Config) Validate() error {
+	if cfg == nil {
+		return fmt.Errorf("config is nil")
+	}
+	secret := strings.TrimSpace(cfg.Server.JWTSecret)
+	if isWeakJWTSecret(secret) || len(secret) < 32 {
+		return fmt.Errorf("server.jwt_secret must be a strong random string of at least 32 characters")
+	}
+	if cfg.Server.JWTExpireHours <= 0 {
+		return fmt.Errorf("server.jwt_expire_hours must be greater than 0")
+	}
+	return nil
+}
+
+func isWeakJWTSecret(secret string) bool {
+	switch strings.ToLower(strings.TrimSpace(secret)) {
+	case "", "change-me", "change-me-in-production", "your-secret", "your-jwt-secret", "replace-me", "替换为强随机字符串":
+		return true
+	default:
+		return false
+	}
 }

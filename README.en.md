@@ -26,7 +26,7 @@ A multi-channel LLM & AI generation service aggregation platform. It provides a 
 | Message Queue | NATS |
 | Auth | JWT + API Key |
 | Dynamic Scripts | goja (JavaScript) |
-| Frontend | Vue 3 + Vite |
+| Frontend | React 19 + Vite |
 
 ## Dependencies
 
@@ -40,8 +40,9 @@ A multi-channel LLM & AI generation service aggregation platform. It provides a 
 ### 1. Configuration
 
 ```bash
-cp config.yaml config.local.yaml
-# Edit database, Redis, NATS, SMTP connection settings
+cp config.docker.yaml config.yaml
+openssl rand -hex 32
+# Put the generated value in server.jwt_secret, then edit DB, Redis, NATS, and SMTP settings
 ```
 
 ### 2. Start (development)
@@ -57,14 +58,14 @@ After startup:
 
 ### 3. Default accounts
 
-On first startup the database is seeded with:
+For production safety, built-in accounts are not created by default. For local development or a first test initialization only, temporarily set `server.seed_default_accounts` to `true` before startup to seed:
 
 | Role | Username | Email | Password | Notes |
 |------|----------|-------|----------|-------|
 | Admin | `admin` | `admin@fanapi.dev` | `Admin@2026!` | Full admin access |
 | Test user | `test` | `test@fanapi.dev` | `Test@2026!` | Regular user, for API testing |
 
-> **Change default passwords before deploying to production.**
+> **Keep `server.seed_default_accounts=false` in production. If default accounts were ever enabled, change their passwords immediately or remove the test account.**
 
 ### 4. Seed data (optional)
 
@@ -75,13 +76,15 @@ psql -U <user> -d <db> -f scripts/seed_chatfire.sql
 
 ### 5. Database migration (upgrades only)
 
-New deployments are handled automatically via xorm `Sync2`. For upgrades from older versions:
+For upgrades from older versions, run migration scripts in order. New deployments still use xorm `Sync2` for base tables, but the SQL migrations add PostgreSQL-specific constraints, comments, and online indexes that `Sync2` does not fully express:
 
 ```bash
-psql -U <user> -d <db> -f scripts/migrate_20260405_add_indexes.sql
+for f in $(ls scripts/migrate_*.sql | sort); do
+  psql -v ON_ERROR_STOP=1 -U <user> -d <db> -f "$f"
+done
 ```
 
-The index migration uses `CONCURRENTLY` and is safe to run on a live database.
+Scripts that use `CREATE INDEX CONCURRENTLY` must not be wrapped in a transaction. Validate production-size migrations in staging first.
 
 ## Channel Script System
 
@@ -199,7 +202,7 @@ fanapi/
 ├── pkg/
 │   └── mailer/       # Email sending
 ├── web/
-│   └── user/         # Frontend (Vue 3 + Vite — user portal + admin panel)
+│   └── app/          # Frontend (React 19 + Vite — user portal + admin panel)
 └── scripts/          # Database init & migration scripts
 ```
 

@@ -3,6 +3,7 @@ package handler
 import (
 	"fanapi/internal/db"
 	"fanapi/internal/model"
+	"fanapi/internal/service"
 	"github.com/gin-gonic/gin"
 	"net/http"
 	"strconv"
@@ -259,11 +260,28 @@ func userStatusText(status string) string {
 
 // PATCH /admin/api-keys/:id/revoke  吊销 API Key
 func RevokeAPIKey(c *gin.Context) {
+	if !requireAdminPermission(c, "users:write") {
+		return
+	}
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "ID 格式错误"})
 		return
 	}
-	db.Engine.ID(id).Update(&model.APIKey{IsActive: false})
+	var apiKey model.APIKey
+	found, err := db.Engine.ID(id).Cols("key_hash").Get(&apiKey)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询 API Key 失败"})
+		return
+	}
+	if !found {
+		c.JSON(http.StatusNotFound, gin.H{"error": "API Key 不存在"})
+		return
+	}
+	if _, err := db.Engine.ID(id).Cols("is_active").Update(&model.APIKey{IsActive: false}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "吊销 API Key 失败"})
+		return
+	}
+	service.InvalidateAPIKeyCache(c.Request.Context(), apiKey.KeyHash)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }

@@ -157,8 +157,8 @@ ALTER TABLE withdraw_requests ADD COLUMN IF NOT EXISTS proof_note TEXT NOT NULL 
 -- 12. billing_transactions 新增关联 ID（用于关联跳转）
 ALTER TABLE billing_transactions ADD COLUMN IF NOT EXISTS llm_log_id BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE billing_transactions ADD COLUMN IF NOT EXISTS task_id    BIGINT NOT NULL DEFAULT 0;
-CREATE INDEX IF NOT EXISTS bt_llm_log_id_idx ON billing_transactions (llm_log_id) WHERE llm_log_id != 0;
-CREATE INDEX IF NOT EXISTS bt_task_id_idx    ON billing_transactions (task_id)    WHERE task_id    != 0;
+CREATE INDEX CONCURRENTLY IF NOT EXISTS bt_llm_log_id_idx ON billing_transactions (llm_log_id) WHERE llm_log_id != 0;
+CREATE INDEX CONCURRENTLY IF NOT EXISTS bt_task_id_idx    ON billing_transactions (task_id)    WHERE task_id    != 0;
 
 -- 13. export_tasks 数据导出任务
 CREATE TABLE IF NOT EXISTS export_tasks (

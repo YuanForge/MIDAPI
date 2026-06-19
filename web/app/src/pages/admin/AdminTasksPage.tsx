@@ -268,7 +268,13 @@ export function AdminTasksPage() {
     if (initial && typeof initial === 'object') {
       return initial as Record<string, unknown>
     }
-    const { _url, _headers, _poll_request, _method, method, query, ...rest } = req
+    const rest = { ...req }
+    delete rest._url
+    delete rest._headers
+    delete rest._poll_request
+    delete rest._method
+    delete rest.method
+    delete rest.query
     if (Object.keys(rest).length > 0) {
       return rest
     }

@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"net"
 	"strings"
 	"sync"
@@ -230,5 +231,5 @@ func APIDocs(c *gin.Context) {
 		siteName = s.Value
 	}
 	c.Header("Content-Type", "text/html; charset=utf-8")
-	c.String(200, fmt.Sprintf(scalarHTMLTpl, siteName))
+	c.String(200, fmt.Sprintf(scalarHTMLTpl, html.EscapeString(siteName)))
 }

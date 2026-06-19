@@ -1,19 +1,27 @@
 package handler
 
 import (
+	"crypto/rand"
 	"encoding/csv"
+	"encoding/hex"
 	"fanapi/internal/db"
 	"fanapi/internal/model"
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 )
 
 // GET /admin/exports
 func ListExportTasks(c *gin.Context) {
+	if !requireAdminPermission(c, "billing:export") {
+		return
+	}
 	adminID := getAdminID(c)
 	var tasks []model.ExportTask
 	db.Engine.Where("created_by=?", adminID).OrderBy("created_at DESC").Limit(50).Find(&tasks)
@@ -22,6 +30,9 @@ func ListExportTasks(c *gin.Context) {
 
 // POST /admin/exports  创建导出任务（异步，直接标记为 pending）
 func CreateExportTask(c *gin.Context) {
+	if !requireAdminPermission(c, "billing:export") {
+		return
+	}
 	var req struct {
 		Name   string     `json:"name"`
 		Type   string     `json:"type"`
@@ -234,12 +245,17 @@ func runExportTask(taskID int64, _ string) {
 	}
 
 	// 写入 CSV 文件
-	exportDir := filepath.Join("uploads", "exports")
+	exportDir := "exports"
 	if err := os.MkdirAll(exportDir, 0o755); err != nil {
 		fail("创建导出目录失败: " + err.Error())
 		return
 	}
-	filename := fmt.Sprintf("export_%d_%d.csv", taskID, time.Now().Unix())
+	randomSuffix, err := randomExportSuffix()
+	if err != nil {
+		fail("生成导出文件名失败: " + err.Error())
+		return
+	}
+	filename := fmt.Sprintf("export_%d_%d_%s.csv", taskID, time.Now().Unix(), randomSuffix)
 	fullPath := filepath.Join(exportDir, filename)
 	f, err := os.Create(fullPath)
 	if err != nil {
@@ -264,7 +280,7 @@ func runExportTask(taskID int64, _ string) {
 	if info != nil {
 		fileSize = info.Size()
 	}
-	fileURL := fmt.Sprintf("/uploads/exports/%s", filename)
+	fileURL := fmt.Sprintf("/admin/exports/%d/download?file=%s", taskID, url.QueryEscape(filename))
 
 	db.Engine.ID(taskID).Cols("status", "progress", "file_url", "file_size").Update(&model.ExportTask{
 		Status:   "done",
@@ -272,4 +288,73 @@ func runExportTask(taskID int64, _ string) {
 		FileURL:  fileURL,
 		FileSize: fileSize,
 	})
+}
+
+func randomExportSuffix() (string, error) {
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
+}
+
+// GET /admin/exports/:id/download
+func DownloadExportTask(c *gin.Context) {
+	if !requireAdminPermission(c, "billing:export") {
+		return
+	}
+	taskID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ID 格式错误"})
+		return
+	}
+	adminID := getAdminID(c)
+	var task model.ExportTask
+	found, err := db.Engine.ID(taskID).Get(&task)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询导出任务失败"})
+		return
+	}
+	if !found || task.CreatedBy != adminID {
+		c.JSON(http.StatusNotFound, gin.H{"error": "导出任务不存在"})
+		return
+	}
+	if task.Status != "done" || task.FileURL == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "导出任务尚未完成"})
+		return
+	}
+	if task.ExpiresAt != nil && time.Now().After(*task.ExpiresAt) {
+		c.JSON(http.StatusGone, gin.H{"error": "导出文件已过期"})
+		return
+	}
+
+	filename := exportFilenameFromURL(task.FileURL)
+	if filename == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "导出文件不存在"})
+		return
+	}
+	fullPath := filepath.Join("exports", filename)
+	if strings.HasPrefix(task.FileURL, "/uploads/exports/") {
+		fullPath = filepath.Join("uploads", "exports", filename)
+	}
+	if _, err := os.Stat(fullPath); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "导出文件不存在"})
+		return
+	}
+	c.Header("X-Content-Type-Options", "nosniff")
+	c.FileAttachment(fullPath, filename)
+}
+
+func exportFilenameFromURL(fileURL string) string {
+	parsed, err := url.Parse(fileURL)
+	if err == nil {
+		if file := parsed.Query().Get("file"); file != "" {
+			return filepath.Base(file)
+		}
+	}
+	base := filepath.Base(fileURL)
+	if base == "." || base == "/" || !strings.HasSuffix(strings.ToLower(base), ".csv") {
+		return ""
+	}
+	return base
 }

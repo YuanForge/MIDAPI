@@ -13,14 +13,6 @@ import (
 // 管理员拥有至少等同客服的所有权限。
 func Agent() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if role, exists := c.Get("role"); exists {
-			r, _ := role.(string)
-			if r == "agent" || r == "admin" {
-				c.Next()
-				return
-			}
-		}
-
 		userID, exists := c.Get("user_id")
 		if !exists {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "无访问权限"})

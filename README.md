@@ -29,7 +29,7 @@
 | 消息队列 | NATS |
 | 认证 | JWT + API Key |
 | 动态脚本 | goja (JavaScript) |
-| 前端 | Vue 3 + Vite |
+| 前端 | React 19 + Vite |
 
 ## 依赖服务
 
@@ -45,8 +45,9 @@
 复制并编辑配置文件：
 
 ```bash
-cp config.yaml config.local.yaml
-# 编辑数据库、Redis、NATS、SMTP 等连接信息
+cp config.docker.yaml config.yaml
+openssl rand -hex 32
+# 将生成值填入 server.jwt_secret，并编辑数据库、Redis、NATS、SMTP 等连接信息
 ```
 
 ### 2. 启动（开发环境）
@@ -62,14 +63,14 @@ bash scripts/start.sh
 
 ### 3. 默认账号
 
-服务首次启动时，数据库会自动创建以下账号：
+出于生产安全，默认不会自动创建内置账号。仅本地开发或首次初始化测试环境需要时，临时将 `server.seed_default_accounts` 设为 `true` 后启动，服务会创建以下账号：
 
 | 角色 | 用户名 | 邮箱 | 密码 | 说明 |
 |------|--------|------|------|------|
 | 管理员 | `admin` | `admin@fanapi.dev` | `Admin@2026!` | 拥有全部管理接口权限 |
 | 测试用户 | `test` | `test@fanapi.dev` | `Test@2026!` | 普通用户权限，用于接口调试 |
 
-> **生产环境请立即修改默认密码。**
+> **生产环境保持 `server.seed_default_accounts=false`。如曾启用默认账号，必须立即修改密码或删除测试账号。**
 
 ### 4. 数据库种子数据（可选）
 
@@ -80,35 +81,14 @@ psql -U <user> -d <db> -f scripts/seed_chatfire.sql
 
 ### 5. 数据库迁移（非首次部署）
 
-若数据库由旧版升级，需按顺序执行迁移脚本补充新字段（新部署由 xorm `Sync2` 自动处理，无需手动执行）：
+若数据库由旧版升级，需按顺序执行迁移脚本补充新字段、索引和约束；即使新部署会由 xorm `Sync2` 创建基础表结构，仍建议在上线前按顺序执行 `scripts/migrate_*.sql`，确保 PostgreSQL 约束、注释和在线索引完整：
 ```bash
-# 添加 error_script 字段、corr_id 关联字段
-psql -U <user> -d <db> -f scripts/migrate_20260405_add_error_script_corr_id.sql
-
-# 高并发性能索引（使用 CONCURRENTLY，不锁表，可在线执行）
-psql -U <user> -d <db> -f scripts/migrate_20260405_add_indexes.sql
-
-# 支付订单补充字段（apply_time、apply_result 等）
-psql -U <user> -d <db> -f scripts/migrate_20260412_payment_order_apply_fields.sql
-
-# 号池 Key 类型字段（key_type: normal / low_price）
-psql -U <user> -d <db> -f scripts/migrate_20260416_add_key_type.sql
-
-# 渠道图标与描述字段（icon_url、description）
-psql -U <user> -d <db> -f scripts/migrate_20260416_channel_icon_and_desc.sql
-
-# 邀请码 / 号商关联字段（invite_code、agent_id）
-psql -U <user> -d <db> -f scripts/migrate_20260416_invite_agent.sql
-
-# OCPC 转化类型字段
-psql -U <user> -d <db> -f scripts/migrate_20260416_ocpc_conv_types.sql
-
-# 邀请返佣系统（frozen_balance、rebate_ratio、inviter_id 等）
-psql -U <user> -d <db> -f scripts/migrate_20260418_invite_rebate.sql
-
-# 号商表（vendors）及号池 Key 归属关联
-psql -U <user> -d <db> -f scripts/migrate_20260418_vendors.sql
+for f in $(ls scripts/migrate_*.sql | sort); do
+  psql -v ON_ERROR_STOP=1 -U <user> -d <db> -f "$f"
+done
 ```
+
+> 带 `CREATE INDEX CONCURRENTLY` 的脚本不要包在事务里执行；生产大表迁移建议先在 staging 验证耗时。
 
 ## 收钱吧接入自检清单（最小可用）
 
@@ -307,29 +287,14 @@ fanapi/
 ├── pkg/
 │   └── mailer/       # 邮件发送
 ├── web/
-│   └── user/         # 前端（Vue 3 + Vite，用户端 + 管理后台 + 号商门户）
-│       ├── src/views/         # 页面组件
-│       │   ├── admin/         # 管理后台页面（路由前缀 /admin）
-│       │   │   └── vendors/   # 号商管理
-│       │   ├── agent/         # 推广员门户页面
-│       │   ├── auth/          # 登录 / 注册
-│       │   ├── billing/       # 充值与账单
-│       │   ├── dashboard/     # 布局与渠道列表
-│       │   ├── docs/          # API 文档
-│       │   ├── invite/        # 邀请中心（邀请码、返佣积分）
-│       │   ├── keys/          # API Key 管理
-│       │   ├── playground/    # 在线调试
-│       │   ├── tasks/         # 任务中心
-│       │   └── vendor/        # 号商门户页面（路由前缀 /vendor）
-│       └── src/api/           # API 封装
-│           ├── index.js       # 用户端 API
-│           ├── http.js        # 用户端 axios 实例
-│           ├── admin.js       # 管理端 API
-│           ├── admin-http.js  # 管理端 axios 实例
-│           ├── agent.js       # 推广员端 API
-│           ├── agent-http.js  # 推广员端 axios 实例
-│           └── vendor.js      # 号商端 API（vendor JWT）
-└── scripts/          # 数据库初始化脚本
+│   └── app/          # 前端（React 19 + Vite，用户端 + 管理后台 + 号商门户）
+│       └── src/
+│           ├── app/          # 路由和应用入口
+│           ├── components/   # 通用组件和 UI 组件
+│           ├── layouts/      # 控制台、用户端、管理端布局
+│           ├── lib/api/      # API 封装
+│           └── pages/        # admin / user / vendor / public 页面
+└── scripts/          # 数据库初始化与迁移脚本
 ```
 
 ---

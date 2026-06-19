@@ -16,7 +16,7 @@ type Segment =
 function parseSegments(content: string): Segment[] {
   const segments: Segment[] = []
   // 匹配 ![alt](url) — url 允许 http/https 或 data:image/
-  const imgRe = /!\[([^\]]*)\]\(((?:https?:\/\/|data:image\/)[^\)]+)\)/g
+  const imgRe = /!\[([^\]]*)\]\(((?:https?:\/\/|data:image\/)[^)]+)\)/g
   let lastIndex = 0
   let match: RegExpExecArray | null
 

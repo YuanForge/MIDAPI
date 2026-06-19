@@ -1,7 +1,9 @@
 server:
   port: 8080
-  jwt_secret: "change-me-in-production"
+  jwt_secret: "replace-me"
   jwt_expire_hours: 24
+  seed_default_accounts: false
+  seed_default_channels: false
 
 db:
   host: "host-gateway"  # 宿主机 PostgreSQL 地址（docker-compose extra_hosts 将 host-gateway 映射到宿主机 IP，兼容 Linux/Mac/Windows）

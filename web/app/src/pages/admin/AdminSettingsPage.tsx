@@ -15,6 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { adminApi, type AdminAuditLog } from '@/lib/api/admin'
 import { useAsync } from '@/hooks/use-async'
+import { sanitizeCustomHtml } from '@/lib/sanitize-html'
 
 type SettingsMap = Record<string, string>
 type PlanRow = { credits: number; bonus: number; amount: number; origin_amount: number; desc: string }
@@ -367,9 +368,9 @@ export function AdminSettingsPage() {
               {/* 页眉&页脚 */}
               <TabsContent value="appearance" className="px-6 pb-6">
                 <Alert className="mb-4 mt-2 border-amber-200 bg-amber-50 text-amber-800">
-                  <AlertDescription>
-                    安全提示：页眉/页脚内容直接通过 <code>dangerouslySetInnerHTML</code> 渲染，请勿插入不可信的第三方脚本，避免 XSS 风险。
-                  </AlertDescription>
+	                  <AlertDescription>
+	                    安全提示：页眉/页脚会在渲染前过滤脚本、事件属性和危险链接协议；第三方脚本不会生效。
+	                  </AlertDescription>
                 </Alert>
                 <div className="max-w-2xl divide-y">
                   <FieldRow label="页眉 HTML">
@@ -396,12 +397,10 @@ export function AdminSettingsPage() {
                     <FieldRow label="预览">
                       <div className="rounded-lg border overflow-hidden">
                         <div className="bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground">页眉预览</div>
-                        {/* eslint-disable-next-line react/no-danger */}
-                        <div dangerouslySetInnerHTML={{ __html: form.header_html || '<span style="color:#aaa">（空）</span>' }} />
+	                        <div dangerouslySetInnerHTML={{ __html: sanitizeCustomHtml(form.header_html || '<span style="color:#aaa">（空）</span>') }} />
                         <Separator />
                         <div className="bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground">页脚预览</div>
-                        {/* eslint-disable-next-line react/no-danger */}
-                        <div dangerouslySetInnerHTML={{ __html: form.footer_html || '<span style="color:#aaa">（空）</span>' }} />
+	                        <div dangerouslySetInnerHTML={{ __html: sanitizeCustomHtml(form.footer_html || '<span style="color:#aaa">（空）</span>') }} />
                       </div>
                     </FieldRow>
                   ) : null}

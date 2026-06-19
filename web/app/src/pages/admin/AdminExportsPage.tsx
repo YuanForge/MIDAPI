@@ -31,7 +31,7 @@ import { useAsync } from '@/hooks/use-async'
 
 function statusBadge(s: string | undefined) {
   if (s === 'done') return <Badge className="bg-emerald-600 text-white">完成</Badge>
-  if (s === 'running') return <Badge className="bg-blue-600 text-white">处理中</Badge>
+  if (s === 'running' || s === 'processing') return <Badge className="bg-blue-600 text-white">处理中</Badge>
   if (s === 'failed') return <Badge variant="destructive">失败</Badge>
   return <Badge variant="outline">排队中</Badge>
 }
@@ -52,6 +52,25 @@ export function AdminExportsPage() {
       await adminApi.createExportTask({ name: form.name, type: form.type, params: {} })
       setCreateOpen(false)
       reload()
+    } catch (err) {
+      const { getApiErrorMessage } = await import('@/lib/api/http')
+      setMutError(getApiErrorMessage(err))
+    }
+  }
+
+  async function handleDownload(task: AdminExportTask) {
+    if (!task.id) return
+    setMutError('')
+    try {
+      const blob = await adminApi.downloadExportTask(task.id)
+      const objectUrl = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = objectUrl
+      a.download = `${task.name || `export_${task.id}`}.csv`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(objectUrl)
     } catch (err) {
       const { getApiErrorMessage } = await import('@/lib/api/http')
       setMutError(getApiErrorMessage(err))
@@ -80,6 +99,11 @@ export function AdminExportsPage() {
       {error ? (
         <Alert variant="destructive">
           <AlertDescription>{String(error)}</AlertDescription>
+        </Alert>
+      ) : null}
+      {mutError ? (
+        <Alert variant="destructive">
+          <AlertDescription>{mutError}</AlertDescription>
         </Alert>
       ) : null}
 
@@ -120,11 +144,9 @@ export function AdminExportsPage() {
                   </TableCell>
                   <TableCell className="text-right">
                     {task.status === 'done' && task.file_url ? (
-                      <a href={task.file_url} target="_blank" rel="noreferrer">
-                        <Button size="sm" variant="outline">
-                          <DownloadIcon className="mr-1 size-3.5" />下载
-                        </Button>
-                      </a>
+                      <Button size="sm" variant="outline" onClick={() => { void handleDownload(task) }}>
+                        <DownloadIcon className="mr-1 size-3.5" />下载
+                      </Button>
                     ) : '-'}
                   </TableCell>
                 </TableRow>
