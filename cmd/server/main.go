@@ -36,7 +36,11 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 
-	if err := db.Init(&cfg.DB, true); err != nil {
+	if err := db.Init(&cfg.DB, db.InitOptions{
+		Migrate:             true,
+		SeedDefaultAccounts: cfg.Server.SeedDefaultAccounts,
+		SeedDefaultChannels: cfg.Server.SeedDefaultChannels,
+	}); err != nil {
 		log.Fatalf("db: %v", err)
 	}
 	log.Println("db connected")

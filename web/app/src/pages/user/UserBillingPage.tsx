@@ -18,6 +18,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { userApi } from '@/lib/api/user'
 import { payApi } from '@/lib/api/pay'
+import { getApiErrorMessage } from '@/lib/api/http'
 import { useAsync } from '@/hooks/use-async'
 import { useSiteSettings } from '@/hooks/use-site-settings'
 import { useAuth } from '@/hooks/use-auth'
@@ -26,7 +27,14 @@ import { formatCredits } from '@/lib/formatters/credits'
 import { cn } from '@/lib/utils'
 import { Check, Info, Loader2, RefreshCcw, Wallet } from 'lucide-react'
 import { toast } from 'sonner'
-import type { PaymentOrder } from '@/lib/api/user'
+import type { PaymentOrder, UserTransaction } from '@/lib/api/user'
+
+type BillingTransaction = UserTransaction & {
+  balance_after?: number | null
+  metrics?: {
+    task_id?: number | string
+  } | null
+}
 
 function cx(...classes: (string | undefined | null | false)[]) {
   return classes.filter(Boolean).join(' ')
@@ -80,8 +88,8 @@ export function UserBillingPage() {
     try {
       const res = await payApi.validateCoupon(couponCode.trim(), amount)
       setCouponResult({ discount_yuan: res.discount_yuan, final_amount: res.final_amount })
-    } catch (e: any) {
-      setCouponError(e.message || '优惠券验证失败')
+    } catch (error: unknown) {
+      setCouponError(getApiErrorMessage(error) || '优惠券验证失败')
     } finally {
       setCouponValidating(false)
     }
@@ -114,10 +122,10 @@ export function UserBillingPage() {
       txCorrIdFilter || undefined,
     )
     return {
-      items: Array.isArray(res) ? res : res.items ?? res.transactions ?? [],
+      items: (Array.isArray(res) ? res : res.items ?? res.transactions ?? []) as BillingTransaction[],
       total: !Array.isArray(res) ? res.total ?? 0 : 0
     }
-  }, { items: [], total: 0 } as { items: unknown[]; total: number }, [txPage, txTaskIdFilter, txCorrIdFilter])
+  }, { items: [] as BillingTransaction[], total: 0 }, [txPage, txTaskIdFilter, txCorrIdFilter])
 
   // Orders State
   const [orderPage, setOrderPage] = useState(1)
@@ -127,7 +135,7 @@ export function UserBillingPage() {
       items: res.orders || [],
       total: res.total || 0
     }
-  }, { items: [], total: 0 } as any, [orderPage])
+  }, { items: [] as PaymentOrder[], total: 0 }, [orderPage])
 
   // Update URL on tab change
   const handleTabChange = (val: string) => {
@@ -211,8 +219,8 @@ export function UserBillingPage() {
           openPaymentPage(res.pay_url)
         }
       }
-    } catch (e: any) {
-      toast.error(e.message || '支付发起失败')
+    } catch (error: unknown) {
+      toast.error(getApiErrorMessage(error) || '支付发起失败')
     } finally {
       setIsPaying(false)
     }
@@ -498,28 +506,32 @@ export function UserBillingPage() {
                 {!txData?.items?.length ? (
                   <TableRow><TableCell colSpan={5} className="text-center py-6 text-muted-foreground">暂无流水记录</TableCell></TableRow>
                 ) : (
-                  txData.items.map((row: any) => (
-                    <TableRow key={row.id}>
-                      <TableCell>
-                        <div className="flex flex-wrap items-center gap-1">
-                          <Badge variant="outline">{txTypeLabel(row.type)}</Badge>
-                          {(row.model_credit_charged > 0) && (
-                            <Badge variant="outline" className="text-xs text-purple-600 border-purple-300">专属积分</Badge>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell className={cn("font-medium", txAmtColor(row.type))}>
-                        {txSign(row.type)} {formatCredits(Math.abs(row.credits || row.amount || 0))} 积分
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {row.balance_after != null ? `${formatCredits(row.balance_after)} 积分` : '—'}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs text-blue-500">
-                        {row.metrics?.task_id ? `#${row.metrics.task_id}` : '—'}
-                      </TableCell>
-                      <TableCell>{row.created_at}</TableCell>
-                    </TableRow>
-                  ))
+                  txData.items.map((row) => {
+                    const rowType = row.type ?? ''
+                    const modelCreditCharged = row.model_credit_charged ?? 0
+                    return (
+                      <TableRow key={row.id}>
+                        <TableCell>
+                          <div className="flex flex-wrap items-center gap-1">
+                            <Badge variant="outline">{txTypeLabel(rowType)}</Badge>
+                            {modelCreditCharged > 0 && (
+                              <Badge variant="outline" className="text-xs text-purple-600 border-purple-300">专属积分</Badge>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell className={cn("font-medium", txAmtColor(rowType))}>
+                          {txSign(rowType)} {formatCredits(Math.abs(row.credits || row.amount || 0))} 积分
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {row.balance_after != null ? `${formatCredits(row.balance_after)} 积分` : '—'}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs text-blue-500">
+                          {row.metrics?.task_id ? `#${row.metrics.task_id}` : '—'}
+                        </TableCell>
+                        <TableCell>{row.created_at}</TableCell>
+                      </TableRow>
+                    )
+                  })
                 )}
               </TableBody>
             </Table>

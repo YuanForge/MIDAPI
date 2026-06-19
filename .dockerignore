@@ -8,8 +8,11 @@ web/user/dist
 web/app/node_modules
 web/app/dist
 /tmp
+out/
 *.log
 *.pid
 uploads/
 server
-
+cmd/server/server
+web/app/server
+*.test

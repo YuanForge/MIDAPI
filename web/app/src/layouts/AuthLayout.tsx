@@ -2,7 +2,9 @@ import { Outlet } from 'react-router-dom'
 
 import { ThemeToggle } from '@/components/shared/ThemeToggle'
 
-export function AuthLayout({ adminMode: _adminMode = false }: { adminMode?: boolean } = {}) {
+export function AuthLayout({ adminMode = false }: { adminMode?: boolean } = {}) {
+  void adminMode
+
   return (
     <div className="relative min-h-screen overflow-hidden bg-[radial-gradient(ellipse_at_top_left,color-mix(in_oklab,var(--primary)_10%,transparent)_0%,transparent_50%),radial-gradient(ellipse_at_bottom_right,color-mix(in_oklab,var(--chart-3)_8%,transparent)_0%,transparent_50%),linear-gradient(160deg,color-mix(in_oklab,var(--background)_97%,var(--muted)),var(--background)_55%,color-mix(in_oklab,var(--background)_94%,var(--accent)))]">
       {/* 顶部装饰线 */}

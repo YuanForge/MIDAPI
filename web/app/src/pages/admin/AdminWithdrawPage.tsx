@@ -83,7 +83,9 @@ export function AdminWithdrawPage() {
 
   // 自动轮询待审核数量（每 30 秒）
   const reloadRef = useRef(reload)
-  reloadRef.current = reload
+  useEffect(() => {
+    reloadRef.current = reload
+  }, [reload])
   useEffect(() => {
     const timer = setInterval(() => reloadRef.current(), 30_000)
     return () => clearInterval(timer)

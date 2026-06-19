@@ -1,14 +1,21 @@
 # Node
 node_modules/
+web/app/node_modules/
+web/app/dist/
+web/app/server
 web/admin/node_modules/
 web/user/node_modules/
 web/admin/dist/
 web/user/dist/
 
 # Go build outputs
+/server
+/cmd/server/server
+/out/
 /tmp/fanapi-server
 /tmp/fanapi-script
 *.exe
+*.test
 
 # Swagger generated artifacts (only docs/docs.go is needed)
 docs/swagger.json
@@ -22,6 +29,9 @@ config.local.yaml
 
 # Logs
 *.log
+
+# Runtime uploads / generated exports
+uploads/
 
 # OS
 .DS_Store

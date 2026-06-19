@@ -396,11 +396,9 @@ export function AdminSettingsPage() {
                     <FieldRow label="预览">
                       <div className="rounded-lg border overflow-hidden">
                         <div className="bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground">页眉预览</div>
-                        {/* eslint-disable-next-line react/no-danger */}
                         <div dangerouslySetInnerHTML={{ __html: form.header_html || '<span style="color:#aaa">（空）</span>' }} />
                         <Separator />
                         <div className="bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground">页脚预览</div>
-                        {/* eslint-disable-next-line react/no-danger */}
                         <div dangerouslySetInnerHTML={{ __html: form.footer_html || '<span style="color:#aaa">（空）</span>' }} />
                       </div>
                     </FieldRow>

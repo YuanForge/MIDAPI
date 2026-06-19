@@ -19,7 +19,7 @@ function asyncReduce<T>(state: AsyncState<T>, action: AsyncAction<T>): AsyncStat
   }
 }
 
-export function useAsync<T>(fetcher: () => Promise<T>, initialData: T, deps: any[] = []) {
+export function useAsync<T>(fetcher: () => Promise<T>, initialData: T, deps: readonly unknown[] = []) {
   const [state, dispatch] = useReducer(
     (s: AsyncState<T>, a: AsyncAction<T>) => asyncReduce(s, a),
     { data: initialData, loading: true, error: '' },

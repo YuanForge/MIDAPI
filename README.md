@@ -29,7 +29,7 @@
 | 消息队列 | NATS |
 | 认证 | JWT + API Key |
 | 动态脚本 | goja (JavaScript) |
-| 前端 | Vue 3 + Vite |
+| 前端 | React 19 + Vite |
 
 ## 依赖服务
 
@@ -45,8 +45,9 @@
 复制并编辑配置文件：
 
 ```bash
-cp config.yaml config.local.yaml
-# 编辑数据库、Redis、NATS、SMTP 等连接信息
+cp config.docker.yaml config.yaml
+openssl rand -hex 32
+# 将生成值填入 server.jwt_secret，并编辑数据库、Redis、NATS、SMTP 等连接信息
 ```
 
 ### 2. 启动（开发环境）
@@ -62,14 +63,14 @@ bash scripts/start.sh
 
 ### 3. 默认账号
 
-服务首次启动时，数据库会自动创建以下账号：
+出于生产安全，默认不会自动创建内置账号。仅本地开发或首次初始化测试环境需要时，临时将 `server.seed_default_accounts` 设为 `true` 后启动，服务会创建以下账号：
 
 | 角色 | 用户名 | 邮箱 | 密码 | 说明 |
 |------|--------|------|------|------|
 | 管理员 | `admin` | `admin@fanapi.dev` | `Admin@2026!` | 拥有全部管理接口权限 |
 | 测试用户 | `test` | `test@fanapi.dev` | `Test@2026!` | 普通用户权限，用于接口调试 |
 
-> **生产环境请立即修改默认密码。**
+> **生产环境保持 `server.seed_default_accounts=false`。如曾启用默认账号，必须立即修改密码或删除测试账号。**
 
 ### 4. 数据库种子数据（可选）
 
@@ -307,29 +308,14 @@ fanapi/
 ├── pkg/
 │   └── mailer/       # 邮件发送
 ├── web/
-│   └── user/         # 前端（Vue 3 + Vite，用户端 + 管理后台 + 号商门户）
-│       ├── src/views/         # 页面组件
-│       │   ├── admin/         # 管理后台页面（路由前缀 /admin）
-│       │   │   └── vendors/   # 号商管理
-│       │   ├── agent/         # 推广员门户页面
-│       │   ├── auth/          # 登录 / 注册
-│       │   ├── billing/       # 充值与账单
-│       │   ├── dashboard/     # 布局与渠道列表
-│       │   ├── docs/          # API 文档
-│       │   ├── invite/        # 邀请中心（邀请码、返佣积分）
-│       │   ├── keys/          # API Key 管理
-│       │   ├── playground/    # 在线调试
-│       │   ├── tasks/         # 任务中心
-│       │   └── vendor/        # 号商门户页面（路由前缀 /vendor）
-│       └── src/api/           # API 封装
-│           ├── index.js       # 用户端 API
-│           ├── http.js        # 用户端 axios 实例
-│           ├── admin.js       # 管理端 API
-│           ├── admin-http.js  # 管理端 axios 实例
-│           ├── agent.js       # 推广员端 API
-│           ├── agent-http.js  # 推广员端 axios 实例
-│           └── vendor.js      # 号商端 API（vendor JWT）
-└── scripts/          # 数据库初始化脚本
+│   └── app/          # 前端（React 19 + Vite，用户端 + 管理后台 + 号商门户）
+│       └── src/
+│           ├── app/          # 路由和应用入口
+│           ├── components/   # 通用组件和 UI 组件
+│           ├── layouts/      # 控制台、用户端、管理端布局
+│           ├── lib/api/      # API 封装
+│           └── pages/        # admin / user / vendor / public 页面
+└── scripts/          # 数据库初始化与迁移脚本
 ```
 
 ---
