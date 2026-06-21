@@ -87,10 +87,15 @@ func main() {
 	m := mailer.New(&cfg.SMTP)
 	authH := handler.NewAuthHandler(&cfg.Server, m)
 	vendorH := handler.NewVendorHandler(&cfg.Server)
+	resellerH := handler.NewResellerHandler(cfg)
 
 	r := gin.New()
 	r.Use(gin.Logger())
 	r.Use(gin.Recovery())
+	r.Use(func(c *gin.Context) {
+		c.Set("app_config", cfg)
+		c.Next()
+	})
 	r.Static("/uploads", "uploads")
 
 	// 健康检查（无需认证）
@@ -145,12 +150,35 @@ func main() {
 		vendorPortal.GET("/pools", vendorH.GetSubmittablePools)
 	}
 
+	resellerAuth := r.Group("/reseller/auth")
+	{
+		resellerAuth.POST("/login", resellerH.Login)
+	}
+
+	resellerPortal := r.Group("/reseller")
+	resellerPortal.Use(middleware.ResellerAuth(&cfg.Server))
+	{
+		resellerPortal.GET("/profile", resellerH.GetProfile)
+		resellerPortal.GET("/keys", resellerH.ListKeys)
+		resellerPortal.POST("/keys", resellerH.CreateKey)
+		resellerPortal.GET("/sites", resellerH.ListSites)
+		resellerPortal.POST("/sites", resellerH.CreateSite)
+		resellerPortal.GET("/sites/:id/build-progress", resellerH.GetBuildProgress)
+	}
+
 	// 需认证的用户路由（JWT 或 API Key）
 	authed := r.Group("/")
 	authed.Use(middleware.Auth(&cfg.Server))
 	{
 		authed.POST("/upload/image", handler.UploadImage)
 		authed.POST("/upload/video", handler.UploadVideo)
+
+		resellerPlatform := authed.Group("/reseller/platform")
+		resellerPlatform.Use(middleware.APIKeyOnly())
+		{
+			resellerPlatform.GET("/channels", handler.ResellerPlatformChannels)
+		}
+
 		user := authed.Group("/user")
 		{
 			user.GET("/profile", authH.GetProfile)
@@ -252,6 +280,12 @@ func main() {
 			// 号商管理
 			admin.GET("/vendors", handler.AdminListVendors)
 			admin.PATCH("/vendors/:id", handler.AdminUpdateVendor)
+			admin.GET("/resellers", handler.AdminListResellers)
+			admin.POST("/resellers", handler.AdminCreateReseller)
+			admin.PATCH("/resellers/:id", handler.AdminUpdateReseller)
+			admin.GET("/reseller-sites", handler.AdminListResellerSites)
+			admin.GET("/reseller-site-build-jobs", handler.AdminListResellerSiteBuildJobs)
+			admin.POST("/reseller-site-build-jobs/:id/retry", handler.AdminRetryResellerBuildJob)
 			// 提现管理
 			admin.GET("/withdrawals", handler.AdminListWithdrawals)
 			admin.GET("/withdrawals/pending-count", handler.AdminPendingWithdrawCount)

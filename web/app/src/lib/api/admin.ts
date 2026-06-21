@@ -230,6 +230,62 @@ export type AdminVendor = {
   created_at?: string
 }
 
+export type AdminReseller = {
+  id?: number
+  user_id?: number
+  name?: string
+  contact_name?: string
+  phone?: string
+  notes?: string
+  is_active?: boolean
+  username?: string
+  email?: string | null
+  key_count?: number
+  site_count?: number
+  created_at?: string
+  updated_at?: string
+}
+
+export type AdminResellerSite = {
+  id?: number
+  reseller_id?: number
+  user_id?: number
+  api_key_id?: number
+  site_name?: string
+  logo_url?: string
+  domain?: string
+  site_code?: string
+  db_name?: string
+  redis_db?: number
+  app_port?: number
+  nats_namespace?: string
+  code_path?: string
+  public_url?: string
+  status?: string
+  profit_ratio?: number
+  smtp_host?: string
+  smtp_port?: number
+  smtp_user?: string
+  smtp_from?: string
+  last_error?: string
+  created_at?: string
+  updated_at?: string
+}
+
+export type AdminResellerBuildJob = {
+  id?: number
+  site_id?: number
+  reseller_id?: number
+  status?: string
+  step?: string
+  error?: string
+  resources?: Record<string, unknown>
+  started_at?: string
+  finished_at?: string
+  created_at?: string
+  updated_at?: string
+}
+
 export type AdminCard = {
   id?: number
   code?: string
@@ -673,6 +729,34 @@ export const adminApi = {
     ),
   updateVendor: (id: number, payload: { is_active?: boolean; commission_ratio?: number }) =>
     http.patch<Record<string, unknown>>(`/admin/vendors/${id}`, payload),
+  listResellers: (params: Record<string, unknown> = {}) =>
+    http.get<{ resellers?: AdminReseller[]; items?: AdminReseller[] } | AdminReseller[]>(
+      '/admin/resellers',
+      { params }
+    ),
+  createReseller: (payload: {
+    username: string
+    email?: string
+    password: string
+    name: string
+    contact_name?: string
+    phone?: string
+    notes?: string
+  }) => http.post<{ reseller?: AdminReseller; user?: AdminUser }>('/admin/resellers', payload),
+  updateReseller: (id: number, payload: Partial<Pick<AdminReseller, 'name' | 'contact_name' | 'phone' | 'notes' | 'is_active'>>) =>
+    http.patch<Record<string, unknown>>(`/admin/resellers/${id}`, payload),
+  listResellerSites: (params: Record<string, unknown> = {}) =>
+    http.get<{ sites?: AdminResellerSite[]; items?: AdminResellerSite[] } | AdminResellerSite[]>(
+      '/admin/reseller-sites',
+      { params }
+    ),
+  listResellerSiteBuildJobs: (params: Record<string, unknown> = {}) =>
+    http.get<{ jobs?: AdminResellerBuildJob[]; items?: AdminResellerBuildJob[] } | AdminResellerBuildJob[]>(
+      '/admin/reseller-site-build-jobs',
+      { params }
+    ),
+  retryResellerBuildJob: (id: number) =>
+    http.post<Record<string, unknown>>(`/admin/reseller-site-build-jobs/${id}/retry`, {}),
   listKeyPools: (channelId?: number) =>
     http.get<{ pools?: AdminKeyPool[] } | AdminKeyPool[]>('/admin/key-pools', {
       params: channelId ? { channel_id: channelId } : undefined,

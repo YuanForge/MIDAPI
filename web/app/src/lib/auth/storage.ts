@@ -1,9 +1,10 @@
-type Role = 'user' | 'admin' | 'vendor'
+type Role = 'user' | 'admin' | 'vendor' | 'reseller'
 
 const TOKEN_KEYS: Record<Role, string> = {
   user: 'token',
   admin: 'admin_token',
   vendor: 'vendor_token',
+  reseller: 'reseller_token',
 }
 
 const MODE_KEY = 'fanapi_ui_mode'

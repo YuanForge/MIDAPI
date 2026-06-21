@@ -3,7 +3,7 @@ import type { AxiosRequestConfig } from 'axios'
 
 import { clearRoleToken, getRoleToken } from '@/lib/auth/storage'
 
-type Role = 'user' | 'admin' | 'vendor'
+type Role = 'user' | 'admin' | 'vendor' | 'reseller'
 
 type HttpClient = {
   get: <T>(url: string, config?: AxiosRequestConfig) => Promise<T>
@@ -36,6 +36,7 @@ export function createHttpClient(role?: Role): HttpClient {
           user: '/login',
           admin: '/admin/login',
           vendor: '/vendor/login',
+          reseller: '/reseller/login',
         }
         const loginPath = loginPaths[role]
         if (loginPath && !window.location.pathname.startsWith(loginPath)) {

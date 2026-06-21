@@ -10,6 +10,7 @@ const PERMISSION_REQUIRED: Record<string, string> = {
   '/admin/key-pools':     'keypools:read',
   '/admin/upstream':      'keypools:read',
   '/admin/vendors':       'settings:vendor',
+  '/admin/resellers':     'settings:vendor',
   // 用户
   '/admin/users':         'users:read',
   '/admin/api-keys':      'users:read',

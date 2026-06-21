@@ -9,6 +9,7 @@ const AuthLayout = lazy(() => import('@/layouts/AuthLayout').then((m) => ({ defa
 const UserLayout = lazy(() => import('@/layouts/UserLayout').then((m) => ({ default: m.UserLayout })))
 const AdminLayout = lazy(() => import('@/layouts/AdminLayout').then((m) => ({ default: m.AdminLayout })))
 const VendorLayout = lazy(() => import('@/layouts/VendorLayout').then((m) => ({ default: m.VendorLayout })))
+const ResellerLayout = lazy(() => import('@/layouts/ResellerLayout').then((m) => ({ default: m.ResellerLayout })))
 
 const UserLoginPage = lazy(() => import('@/pages/public/UserLoginPage').then((m) => ({ default: m.UserLoginPage })))
 const RegisterPage = lazy(() => import('@/pages/public/RegisterPage').then((m) => ({ default: m.RegisterPage })))
@@ -47,6 +48,7 @@ const AdminTasksPage = lazy(() => import('@/pages/admin/AdminTasksPage').then((m
 const AdminLogsPage = lazy(() => import('@/pages/admin/AdminLogsPage').then((m) => ({ default: m.AdminLogsPage })))
 const AdminSettingsPage = lazy(() => import('@/pages/admin/AdminSettingsPage').then((m) => ({ default: m.AdminSettingsPage })))
 const AdminVendorsPage = lazy(() => import('@/pages/admin/AdminVendorsPage').then((m) => ({ default: m.AdminVendorsPage })))
+const AdminResellersPage = lazy(() => import('@/pages/admin/AdminResellersPage').then((m) => ({ default: m.AdminResellersPage })))
 const AdminWithdrawPage = lazy(() => import('@/pages/admin/AdminWithdrawPage').then((m) => ({ default: m.AdminWithdrawPage })))
 const AdminPaymentsPage = lazy(() => import('@/pages/admin/AdminPaymentsPage').then((m) => ({ default: m.AdminPaymentsPage })))
 const AdminUpstreamPage = lazy(() => import('@/pages/admin/AdminUpstreamPage').then((m) => ({ default: m.AdminUpstreamPage })))
@@ -63,6 +65,11 @@ const VendorLoginPage = lazy(() => import('@/pages/vendor/VendorLoginPage').then
 const VendorRegisterPage = lazy(() => import('@/pages/vendor/VendorRegisterPage').then((m) => ({ default: m.VendorRegisterPage })))
 const VendorDashboardPage = lazy(() => import('@/pages/vendor/VendorDashboardPage').then((m) => ({ default: m.VendorDashboardPage })))
 const VendorKeysPage = lazy(() => import('@/pages/vendor/VendorKeysPage').then((m) => ({ default: m.VendorKeysPage })))
+
+const ResellerLoginPage = lazy(() => import('@/pages/reseller/ResellerLoginPage').then((m) => ({ default: m.ResellerLoginPage })))
+const ResellerDashboardPage = lazy(() => import('@/pages/reseller/ResellerDashboardPage').then((m) => ({ default: m.ResellerDashboardPage })))
+const ResellerKeysPage = lazy(() => import('@/pages/reseller/ResellerKeysPage').then((m) => ({ default: m.ResellerKeysPage })))
+const ResellerSitesPage = lazy(() => import('@/pages/reseller/ResellerSitesPage').then((m) => ({ default: m.ResellerSitesPage })))
 
 function renderLazy(node: ReactNode) {
   return (
@@ -92,7 +99,7 @@ function RequireRole({
   role,
   redirectTo,
 }: {
-  role: 'user' | 'admin' | 'vendor'
+  role: 'user' | 'admin' | 'vendor' | 'reseller'
   redirectTo: string
 }) {
   const token = getRoleToken(role)
@@ -107,7 +114,7 @@ function PublicOnly({
   role,
   redirectTo,
 }: {
-  role: 'user' | 'admin' | 'vendor'
+  role: 'user' | 'admin' | 'vendor' | 'reseller'
   redirectTo: string
 }) {
   const token = getRoleToken(role)
@@ -201,6 +208,7 @@ export const router = createBrowserRouter([
           { path: 'llm-logs', element: renderLazy(<AdminLogsPage />) },
           { path: 'settings', element: renderLazy(<AdminSettingsPage />) },
           { path: 'vendors', element: renderLazy(<AdminVendorsPage />) },
+          { path: 'resellers', element: renderLazy(<AdminResellersPage />) },
           { path: 'withdraw', element: renderLazy(<AdminWithdrawPage />) },
           { path: 'payments', element: renderLazy(<AdminPaymentsPage />) },
           { path: 'upstream', element: renderLazy(<AdminUpstreamPage />) },
@@ -239,6 +247,33 @@ export const router = createBrowserRouter([
         children: [
           { path: 'dashboard', element: renderLazy(<VendorDashboardPage />) },
           { path: 'keys', element: renderLazy(<VendorKeysPage />) },
+        ],
+      },
+    ],
+  },
+  {
+    element: <PublicOnly role="reseller" redirectTo="/reseller/dashboard" />,
+    errorElement: renderLazy(<AppErrorPage />),
+    children: [
+      {
+        element: renderLazy(<AuthLayout />),
+        children: [
+          { path: '/reseller/login', element: renderLazy(<ResellerLoginPage />) },
+        ],
+      },
+    ],
+  },
+  {
+    element: <RequireRole role="reseller" redirectTo="/reseller/login" />,
+    errorElement: renderLazy(<AppErrorPage />),
+    children: [
+      {
+        path: '/reseller',
+        element: renderLazy(<ResellerLayout />),
+        children: [
+          { path: 'dashboard', element: renderLazy(<ResellerDashboardPage />) },
+          { path: 'keys', element: renderLazy(<ResellerKeysPage />) },
+          { path: 'sites', element: renderLazy(<ResellerSitesPage />) },
         ],
       },
     ],
