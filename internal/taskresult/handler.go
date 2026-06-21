@@ -18,13 +18,15 @@ import (
 
 const maxPoolKeyExhaustRetries = 8
 
-// StartResultProcessor 订阅 RESULTS JetStream 流。
+// StartResultProcessor 订阅当前 NATS namespace 的结果流。
 // 只应在 API 服务器进程中调用。
 func StartResultProcessor(_ config.WorkerConfig) error {
-	if _, err := mq.QueueSubscribe("result.>", "result-proc", handleResult, 0); err != nil {
+	subject := mq.ResultSubjectPattern()
+	consumer := mq.ConsumerName("result-proc")
+	if _, err := mq.QueueSubscribe(subject, consumer, handleResult, 0); err != nil {
 		return fmt.Errorf("subscribe results: %w", err)
 	}
-	log.Println("[result-proc] subscribed to result.>")
+	log.Printf("[result-proc] subscribed to %s (consumer: %s)", subject, consumer)
 	return nil
 }
 
@@ -114,7 +116,7 @@ func handleResult(msg *nats.Msg) {
 						RetryChannelIDs: res.RetryChannelIDs, // 透传：429 轮转 Key 重试若仍失败，仍可触发稳定密钥换渠道重试
 					}
 					data, _ := json.Marshal(job)
-					subject := fmt.Sprintf("task.%s.%d", res.TaskType, res.ChannelID)
+					subject := mq.TaskSubject(res.TaskType, res.ChannelID)
 					if pubErr := mq.Publish(subject, data); pubErr != nil {
 						saveAndFail(ctx, res, upstreamReq, upstreamResp, "rate limited, retry publish failed")
 					}
@@ -165,7 +167,7 @@ func handleResult(msg *nats.Msg) {
 				}
 				updateProcessingTask(ctx, res.TaskID, upstreamReq, upstreamResp)
 				data, _ := json.Marshal(job)
-				subject := fmt.Sprintf("task.%s.%d", res.TaskType, res.ChannelID)
+				subject := mq.TaskSubject(res.TaskType, res.ChannelID)
 				if publishErr := mq.Publish(subject, data); publishErr != nil {
 					saveAndFail(ctx, res, upstreamReq, upstreamResp, "pool key retry publish failed: "+publishErr.Error())
 				}
@@ -354,7 +356,7 @@ func handleResult(msg *nats.Msg) {
 					RetryChannelIDs: remaining,
 				}
 				data, _ := json.Marshal(retryJob)
-				subject := fmt.Sprintf("task.%s.%d", res.TaskType, nextChannelID)
+				subject := mq.TaskSubject(res.TaskType, nextChannelID)
 				if pubErr := mq.Publish(subject, data); pubErr != nil {
 					log.Printf("[result-proc] task %d: retry publish to channel %d failed: %v", res.TaskID, nextChannelID, pubErr)
 					failTaskDB(ctx, res.TaskID, res.UserID, nextChannelID, res.APIKeyID, newCorrID, newCost, "retry publish failed: "+pubErr.Error())

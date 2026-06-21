@@ -21,6 +21,11 @@ redis:
 
 nats:
   url: "nats://host-gateway:4222"  # 宿主机 NATS 地址
+  namespace: master
+  task_stream: TASKS_master
+  task_subject: "master.task.>"
+  result_stream: RESULTS_master
+  result_subject: "master.result.>"
 
 smtp:
   host: smtp.example.com

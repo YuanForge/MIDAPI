@@ -3,7 +3,9 @@ package mq
 import (
 	"fmt"
 	"log"
+	"strings"
 	"time"
+	"unicode"
 
 	"fanapi/internal/config"
 
@@ -11,11 +13,7 @@ import (
 )
 
 const (
-	streamName = "TASKS"
-	streamSubj = "task.>"
-
-	resultStreamName = "RESULTS"
-	resultStreamSubj = "result.>"
+	defaultNamespace = "master"
 
 	// workerAckWait: worker must ACK within this window or the message is redelivered.
 	// Set to well above the longest expected task processing time.
@@ -28,13 +26,13 @@ const (
 var (
 	Conn  *nats.Conn
 	JS    nats.JetStreamContext
-	mqCfg *config.NATSConfig
+	mqCfg natsRuntimeConfig
 )
 
 func Init(cfg *config.NATSConfig) error {
-	mqCfg = cfg
+	mqCfg = normalizeRuntimeConfig(cfg)
 	var err error
-	Conn, err = nats.Connect(cfg.URL)
+	Conn, err = nats.Connect(mqCfg.URL)
 	if err != nil {
 		return fmt.Errorf("nats connect: %w", err)
 	}
@@ -45,36 +43,166 @@ func Init(cfg *config.NATSConfig) error {
 	return nil
 }
 
-// EnsureStream creates or updates the persistent TASKS and RESULTS JetStream streams.
+type natsRuntimeConfig struct {
+	URL           string
+	Namespace     string
+	TaskStream    string
+	TaskSubject   string
+	ResultStream  string
+	ResultSubject string
+	MemoryStorage bool
+	Replicas      int
+}
+
+func normalizeRuntimeConfig(cfg *config.NATSConfig) natsRuntimeConfig {
+	rt := natsRuntimeConfig{
+		Namespace: defaultNamespace,
+		Replicas:  1,
+	}
+	if cfg != nil {
+		rt.URL = strings.TrimSpace(cfg.URL)
+		rt.Namespace = sanitizeName(cfg.Namespace)
+		rt.TaskStream = strings.TrimSpace(cfg.TaskStream)
+		rt.TaskSubject = strings.TrimSpace(cfg.TaskSubject)
+		rt.ResultStream = strings.TrimSpace(cfg.ResultStream)
+		rt.ResultSubject = strings.TrimSpace(cfg.ResultSubject)
+		rt.MemoryStorage = cfg.MemoryStorage
+		if cfg.Replicas > 1 {
+			rt.Replicas = cfg.Replicas
+		}
+	}
+	if rt.Namespace == "" {
+		rt.Namespace = defaultNamespace
+	}
+	if rt.TaskStream == "" {
+		rt.TaskStream = "TASKS_" + rt.Namespace
+	}
+	if rt.TaskSubject == "" {
+		rt.TaskSubject = rt.Namespace + ".task.>"
+	}
+	if rt.ResultStream == "" {
+		rt.ResultStream = "RESULTS_" + rt.Namespace
+	}
+	if rt.ResultSubject == "" {
+		rt.ResultSubject = rt.Namespace + ".result.>"
+	}
+	return rt
+}
+
+// Namespace returns the current logical NATS namespace.
+func Namespace() string {
+	return mqCfg.Namespace
+}
+
+func TaskStreamName() string {
+	return mqCfg.TaskStream
+}
+
+func ResultStreamName() string {
+	return mqCfg.ResultStream
+}
+
+func TaskSubjectPattern() string {
+	return mqCfg.TaskSubject
+}
+
+func ResultSubjectPattern() string {
+	return mqCfg.ResultSubject
+}
+
+// TaskSubject builds a concrete task subject inside the current namespace.
+func TaskSubject(taskType string, channelID int64) string {
+	return fmt.Sprintf("%s.%s.%d", subjectPrefix(mqCfg.TaskSubject), taskType, channelID)
+}
+
+// ResultSubject builds a concrete result subject inside the current namespace.
+func ResultSubject(taskID int64) string {
+	return fmt.Sprintf("%s.%d", subjectPrefix(mqCfg.ResultSubject), taskID)
+}
+
+// NormalizeTaskSubscription scopes old worker subjects like "task.video.*" into
+// the current namespace. Fully qualified subjects are left untouched.
+func NormalizeTaskSubscription(subject string) string {
+	subject = strings.TrimSpace(subject)
+	if subject == "" {
+		return TaskSubjectPattern()
+	}
+	prefix := subjectPrefix(mqCfg.TaskSubject)
+	if subject == prefix || strings.HasPrefix(subject, prefix+".") {
+		return subject
+	}
+	if subject == "task" || strings.HasPrefix(subject, "task.") {
+		suffix := strings.TrimPrefix(subject, "task")
+		return prefix + suffix
+	}
+	return subject
+}
+
+func ConsumerName(parts ...string) string {
+	items := make([]string, 0, len(parts)+1)
+	items = append(items, mqCfg.Namespace)
+	items = append(items, parts...)
+	return sanitizeName(strings.Join(items, "-"))
+}
+
+func subjectPrefix(pattern string) string {
+	pattern = strings.TrimSpace(pattern)
+	pattern = strings.TrimSuffix(pattern, ".>")
+	pattern = strings.TrimSuffix(pattern, ".*")
+	pattern = strings.TrimSuffix(pattern, ">")
+	pattern = strings.TrimSuffix(pattern, "*")
+	return strings.TrimSuffix(pattern, ".")
+}
+
+func sanitizeName(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	var b strings.Builder
+	lastDash := false
+	for _, r := range value {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			b.WriteRune(unicode.ToLower(r))
+			lastDash = false
+		case r == '_' || r == '-':
+			b.WriteRune(r)
+			lastDash = false
+		default:
+			if !lastDash {
+				b.WriteByte('-')
+				lastDash = true
+			}
+		}
+	}
+	return strings.Trim(b.String(), "-_")
+}
+
+// EnsureStream creates or updates the persistent task and result JetStream streams.
 // Must be called once on startup in every process that uses NATS.
 func EnsureStream() error {
 	storage := nats.FileStorage
-	replicas := 1
-	if mqCfg != nil {
-		if mqCfg.MemoryStorage {
-			storage = nats.MemoryStorage
-		}
-		if mqCfg.Replicas > 1 {
-			replicas = mqCfg.Replicas
-		}
+	if mqCfg.MemoryStorage {
+		storage = nats.MemoryStorage
 	}
 	if err := ensureOneStream(&nats.StreamConfig{
-		Name:      streamName,
-		Subjects:  []string{streamSubj},
+		Name:      mqCfg.TaskStream,
+		Subjects:  []string{mqCfg.TaskSubject},
 		Retention: nats.WorkQueuePolicy,
 		Storage:   storage,
 		MaxAge:    24 * time.Hour,
-		Replicas:  replicas,
+		Replicas:  mqCfg.Replicas,
 	}); err != nil {
 		return err
 	}
 	return ensureOneStream(&nats.StreamConfig{
-		Name:      resultStreamName,
-		Subjects:  []string{resultStreamSubj},
+		Name:      mqCfg.ResultStream,
+		Subjects:  []string{mqCfg.ResultSubject},
 		Retention: nats.WorkQueuePolicy,
 		Storage:   storage,
 		MaxAge:    24 * time.Hour,
-		Replicas:  replicas,
+		Replicas:  mqCfg.Replicas,
 	})
 }
 
@@ -96,7 +224,7 @@ func ensureOneStream(cfg *nats.StreamConfig) error {
 	return nil
 }
 
-// PublishResult durably publishes a worker result to the RESULTS stream.
+// PublishResult durably publishes a worker result to the configured result stream.
 func PublishResult(subject string, data []byte) error {
 	_, err := JS.Publish(subject, data)
 	return err
@@ -173,14 +301,30 @@ func Subscribe(subject string, handler nats.MsgHandler) (*nats.Subscription, err
 	return Conn.Subscribe(subject, handler)
 }
 
-// PurgeConsumers removes all consumers from the TASKS stream.
+// PurgeConsumers removes the named consumers from the configured task stream.
 // Must be called once from the worker process before QueueSubscribe to clear stale
 // consumers left over from previous runs (prevents "filtered consumer not unique"
 // on WorkQueue streams). Must NOT be called from the server process.
-func PurgeConsumers() {
-	for info := range JS.Consumers(streamName) {
-		if delErr := JS.DeleteConsumer(streamName, info.Name); delErr == nil {
-			log.Printf("[mq] purged stale consumer %q from stream %s", info.Name, streamName)
+func PurgeConsumers(names ...string) {
+	if len(names) == 0 {
+		log.Printf("[mq] no consumers requested for purge on stream %s", mqCfg.TaskStream)
+		return
+	}
+	wanted := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		if name = strings.TrimSpace(name); name != "" {
+			wanted[name] = struct{}{}
+		}
+	}
+	if len(wanted) == 0 {
+		return
+	}
+	for info := range JS.Consumers(mqCfg.TaskStream) {
+		if _, ok := wanted[info.Name]; !ok {
+			continue
+		}
+		if delErr := JS.DeleteConsumer(mqCfg.TaskStream, info.Name); delErr == nil {
+			log.Printf("[mq] purged stale consumer %q from stream %s", info.Name, mqCfg.TaskStream)
 		}
 	}
 }

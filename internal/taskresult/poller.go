@@ -398,7 +398,7 @@ func publishFailedResult(ctx context.Context, task *model.Task, errMsg string) {
 		failTaskDB(ctx, task.ID, task.UserID, task.ChannelID, task.APIKeyID, task.CorrID, task.CreditsCharged, errMsg)
 		return
 	}
-	subject := fmt.Sprintf("result.%d", task.ID)
+	subject := mq.ResultSubject(task.ID)
 	if pubErr := mq.PublishResult(subject, data); pubErr != nil {
 		log.Printf("[poller] task %d: publish synthetic failed result error: %v, falling back to direct fail", task.ID, pubErr)
 		failTaskDB(ctx, task.ID, task.UserID, task.ChannelID, task.APIKeyID, task.CorrID, task.CreditsCharged, errMsg)

@@ -39,17 +39,22 @@ type RedisConfig struct {
 
 type NATSConfig struct {
 	URL           string `mapstructure:"url"`
+	Namespace     string `mapstructure:"namespace"`      // NATS 逻辑命名空间；主站默认 master，代理站使用独立值
+	TaskStream    string `mapstructure:"task_stream"`    // 任务 JetStream 名；为空时按 namespace 自动生成
+	TaskSubject   string `mapstructure:"task_subject"`   // 任务主题通配符；为空时按 namespace 自动生成
+	ResultStream  string `mapstructure:"result_stream"`  // 结果 JetStream 名；为空时按 namespace 自动生成
+	ResultSubject string `mapstructure:"result_subject"` // 结果主题通配符；为空时按 namespace 自动生成
 	MemoryStorage bool   `mapstructure:"memory_storage"` // true = 内存存储，吞吐更高但重启丢消息
 	Replicas      int    `mapstructure:"replicas"`       // JetStream 副本数，单节点填 1（默认）
 }
 
 // WorkerConfig 控制此 Worker 进程订阅的 NATS 主题列表。
-// 默认订阅 ["task.>"]（全类型）。
+// 默认订阅当前 nats namespace 下的全类型任务主题。
 // 如需运行专用 Worker（如 GPU 节点只处理视频），配置示例：
 //
 //	worker:
 //	  subjects:
-//	    - "task.video.*"
+//	    - "task.video.*" # 自动补当前 namespace，例如 master.task.video.*
 //	  max_concurrent: 10  # 最大同时执行的任务数，0 表示不限制
 type WorkerConfig struct {
 	Subjects      []string `mapstructure:"subjects"`

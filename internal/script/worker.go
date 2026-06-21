@@ -39,43 +39,58 @@ var upstreamHTTPTransport = func() *http.Transport {
 
 // StartWorkers 根据 WorkerConfig 订阅 NATS 任务主题。
 //
-// 默认（未配置）：订阅 "task.>"  ，consumer 名为 "workers-all"。
+// 默认（未配置）：订阅当前 NATS namespace 下的任务主题。
 // 专用 Worker 示例（在 config.yaml 中添加）：
 //
 //	worker:
 //	  subjects:
-//	    - "task.video.*"
+//	    - "task.video.*" # 自动补当前 NATS namespace
 //	    - "task.audio.*"
 func StartWorkers(cfg config.WorkerConfig) error {
-	// 清理上次运行遗留的失效 Consumer，再进行订阅。
-	// 只应在 Worker 进程中运行——如在服务器进程中运行会杀死服务器的 result-proc Consumer。
-	mq.PurgeConsumers()
-
 	if cfg.MaxConcurrent > 0 {
 		log.Printf("[script worker] max concurrent tasks: %d", cfg.MaxConcurrent)
 	}
 
 	subjects := cfg.Subjects
 	if len(subjects) == 0 {
-		subjects = []string{"task.>"}
+		subjects = []string{mq.TaskSubjectPattern()}
 	}
-	for _, subj := range subjects {
+
+	type subscription struct {
+		subject  string
+		consumer string
+	}
+	subs := make([]subscription, 0, len(subjects))
+	consumers := make([]string, 0, len(subjects))
+	for _, rawSubject := range subjects {
+		subj := mq.NormalizeTaskSubscription(rawSubject)
 		consumer := subjectToConsumer(subj)
-		if _, err := mq.QueueSubscribe(subj, consumer, handleTask, cfg.MaxConcurrent); err != nil {
-			return fmt.Errorf("subscribe %s: %w", subj, err)
+		subs = append(subs, subscription{subject: subj, consumer: consumer})
+		consumers = append(consumers, consumer)
+	}
+
+	// 清理当前 worker 将要使用的失效 Consumer，再进行订阅。
+	// 只清理当前 namespace/subject 对应的 consumer，避免影响其他站点。
+	mq.PurgeConsumers(consumers...)
+
+	for _, sub := range subs {
+		if _, err := mq.QueueSubscribe(sub.subject, sub.consumer, handleTask, cfg.MaxConcurrent); err != nil {
+			return fmt.Errorf("subscribe %s: %w", sub.subject, err)
 		}
-		log.Printf("[script worker] subscribed to %s (consumer: %s)", subj, consumer)
+		log.Printf("[script worker] subscribed to %s (consumer: %s)", sub.subject, sub.consumer)
 	}
 	return nil
 }
 
 func subjectToConsumer(subject string) string {
-	s := strings.TrimPrefix(subject, "task.")
+	s := strings.TrimSpace(subject)
+	s = strings.TrimPrefix(s, mq.Namespace()+".")
+	s = strings.TrimPrefix(s, "task.")
 	s = strings.TrimSuffix(s, ".*")
 	s = strings.ReplaceAll(s, ".", "-")
 	s = strings.ReplaceAll(s, ">", "all")
 	s = strings.ReplaceAll(s, "*", "any")
-	return "workers-" + s
+	return mq.ConsumerName("workers", s)
 }
 
 // natsMaxPayload 是 NATS 消息发布的保守最大字节数（略低于服务端限制，留出序列化开销）。
@@ -92,7 +107,7 @@ func handleTask(msg *nats.Msg) {
 
 	result := execJob(context.Background(), &job)
 
-	subject := fmt.Sprintf("result.%d", job.TaskID)
+	subject := mq.ResultSubject(job.TaskID)
 	data, _ := json.Marshal(result)
 
 	// NATS 服务端有最大消息大小限制（默认 1MB）。

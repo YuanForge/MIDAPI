@@ -325,7 +325,7 @@ func createTask(c *gin.Context, taskType string, reqData map[string]interface{})
 		return
 	}
 
-	natSubject := fmt.Sprintf("task.%s.%d", taskType, channelID)
+	natSubject := mq.TaskSubject(taskType, channelID)
 	job := &model.TaskJob{
 		TaskID:          task.ID,
 		TaskType:        taskType,
