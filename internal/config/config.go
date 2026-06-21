@@ -1,16 +1,21 @@
 package config
 
-import (
-	"github.com/spf13/viper"
-)
+import "github.com/spf13/viper"
 
 type Config struct {
-	Server ServerConfig `mapstructure:"server"`
-	DB     DBConfig     `mapstructure:"db"`
-	Redis  RedisConfig  `mapstructure:"redis"`
-	NATS   NATSConfig   `mapstructure:"nats"`
-	SMTP   SMTPConfig   `mapstructure:"smtp"`
-	Worker WorkerConfig `mapstructure:"worker"`
+	App             AppConfig             `mapstructure:"app"`
+	Server          ServerConfig          `mapstructure:"server"`
+	DB              DBConfig              `mapstructure:"db"`
+	Redis           RedisConfig           `mapstructure:"redis"`
+	NATS            NATSConfig            `mapstructure:"nats"`
+	SMTP            SMTPConfig            `mapstructure:"smtp"`
+	Worker          WorkerConfig          `mapstructure:"worker"`
+	PlatformAPI     PlatformAPIConfig     `mapstructure:"platform_api"`
+	ResellerBuilder ResellerBuilderConfig `mapstructure:"reseller_builder"`
+}
+
+type AppConfig struct {
+	Mode string `mapstructure:"mode"`
 }
 
 type ServerConfig struct {
@@ -69,6 +74,22 @@ type SMTPConfig struct {
 	From     string `mapstructure:"from"`
 }
 
+type PlatformAPIConfig struct {
+	BaseURL          string `mapstructure:"base_url"`
+	Key              string `mapstructure:"key"`
+	PriceSyncEnabled bool   `mapstructure:"price_sync_enabled"`
+}
+
+type ResellerBuilderConfig struct {
+	AutoBuild          bool    `mapstructure:"auto_build"`
+	SourcePath         string  `mapstructure:"source_path"`
+	BasePath           string  `mapstructure:"base_path"`
+	DefaultRedisStart  int     `mapstructure:"default_redis_start"`
+	DefaultAppPort     int     `mapstructure:"default_app_port"`
+	DefaultProfitRatio float64 `mapstructure:"default_profit_ratio"`
+	PlatformBaseURL    string  `mapstructure:"platform_base_url"`
+}
+
 func Load() (*Config, error) {
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
@@ -84,5 +105,27 @@ func Load() (*Config, error) {
 	if err := viper.Unmarshal(&cfg); err != nil {
 		return nil, err
 	}
+	cfg.applyDefaults()
 	return &cfg, nil
+}
+
+func (c *Config) applyDefaults() {
+	if c.App.Mode == "" {
+		c.App.Mode = "master"
+	}
+	if c.ResellerBuilder.SourcePath == "" {
+		c.ResellerBuilder.SourcePath = "/data/code/FanAPI"
+	}
+	if c.ResellerBuilder.BasePath == "" {
+		c.ResellerBuilder.BasePath = "/data/code"
+	}
+	if c.ResellerBuilder.DefaultRedisStart <= 0 {
+		c.ResellerBuilder.DefaultRedisStart = 1
+	}
+	if c.ResellerBuilder.DefaultAppPort <= 0 {
+		c.ResellerBuilder.DefaultAppPort = 18080
+	}
+	if c.ResellerBuilder.DefaultProfitRatio <= 0 {
+		c.ResellerBuilder.DefaultProfitRatio = 1.7
+	}
 }

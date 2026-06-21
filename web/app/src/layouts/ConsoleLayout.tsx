@@ -82,7 +82,7 @@ export type NavGroup = {
 }
 
 type ConsoleLayoutProps = {
-  role: 'user' | 'admin' | 'vendor'
+  role: 'user' | 'admin' | 'vendor' | 'reseller'
   // Support flat list (legacy) or grouped navigation
   items?: NavItem[]
   groups?: NavGroup[]
@@ -202,7 +202,8 @@ export function ConsoleLayout({
     clearRoleToken(role)
     navigate(
       role === 'admin' ? '/admin/login' :
-      role === 'vendor' ? '/vendor/login' : '/login'
+      role === 'vendor' ? '/vendor/login' :
+      role === 'reseller' ? '/reseller/login' : '/login'
     )
   }
 
@@ -311,7 +312,8 @@ export function ConsoleLayout({
                     <span className="hidden max-w-28 truncate text-sm sm:inline">
                       {displayName ??
                         (role === 'admin' ? '管理员' :
-                         role === 'vendor' ? 'Vendor' : t('layout.userFallback'))}
+                         role === 'vendor' ? 'Vendor' :
+                         role === 'reseller' ? 'Reseller' : t('layout.userFallback'))}
                     </span>
                   </Button>
                 </DropdownMenuTrigger>
@@ -418,6 +420,7 @@ export const adminNavItems: NavItem[] = [
   { label: '上游平台', href: '/admin/upstream', icon: NetworkIcon },
   { label: 'OCPC 上报', href: '/admin/ocpc', icon: MegaphoneIcon },
   { label: '号商管理', href: '/admin/vendors', icon: BriefcaseBusinessIcon },
+  { label: '代理商管理', href: '/admin/resellers', icon: BriefcaseBusinessIcon },
   { label: '提现管理', href: '/admin/withdraw', icon: WalletIcon },
   { label: '通知中心', href: '/admin/notifications', icon: MessageCircleIcon },
   { label: '告警中心', href: '/admin/alerts', icon: BlocksIcon },
