@@ -31,7 +31,7 @@ RUN npm run build
 # ─────────────────────────────────────────────────────────────
 # Stage 2: 编译 Go 二进制（静态链接，无 CGO）
 # ─────────────────────────────────────────────────────────────
-FROM docker.io/library/golang:1.26.2-alpine AS go-builder
+FROM docker.io/library/golang:1.26.4-alpine AS go-builder
 
 ENV CGO_ENABLED=0 \
     GOOS=linux \
