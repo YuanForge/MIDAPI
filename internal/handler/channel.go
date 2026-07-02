@@ -10,6 +10,9 @@ import (
 
 // POST /admin/channels
 func CreateChannel(c *gin.Context) {
+	if abortIfResellerSiteChannelWrite(c) {
+		return
+	}
 	var ch model.Channel
 	if err := c.ShouldBindJSON(&ch); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -106,6 +109,9 @@ func parseOptionalFloat(raw string) (*float64, error) {
 
 // PUT /admin/channels/:id
 func UpdateChannel(c *gin.Context) {
+	if abortIfResellerSiteChannelWrite(c) {
+		return
+	}
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "ID 格式错误"})
@@ -126,6 +132,9 @@ func UpdateChannel(c *gin.Context) {
 
 // PATCH /admin/channels/:id/active — 仅更新渠道启用状态，不影响其他字段
 func PatchChannelActive(c *gin.Context) {
+	if abortIfResellerSiteChannelWrite(c) {
+		return
+	}
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "ID 格式错误"})
@@ -171,6 +180,9 @@ func RefreshChannelRuntime(c *gin.Context) {
 
 // DELETE /admin/channels/:id
 func DeleteChannel(c *gin.Context) {
+	if abortIfResellerSiteChannelWrite(c) {
+		return
+	}
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "ID 格式错误"})

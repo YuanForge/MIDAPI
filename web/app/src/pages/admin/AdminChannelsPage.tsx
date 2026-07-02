@@ -49,6 +49,7 @@ import {
   type AdminUpstreamPlatform,
 } from '@/lib/api/admin'
 import { useAsync } from '@/hooks/use-async'
+import { useSiteSettings } from '@/hooks/use-site-settings'
 
 type ChannelForm = {
   id?: number
@@ -599,6 +600,8 @@ const emptyChannelFilters = {
 }
 
 export function AdminChannelsPage() {
+  const { settings } = useSiteSettings()
+  const isResellerSite = settings.appMode === 'reseller_site'
   const [page, setPage] = useState(1)
   const [filters, setFilters] = useState({ ...emptyChannelFilters })
   const [queryParams, setQueryParams] = useState<Record<string, string>>({})
@@ -647,6 +650,14 @@ export function AdminChannelsPage() {
 
   const error = loadError || mutError
 
+  function ensureChannelWriteAllowed() {
+    if (!isResellerSite) {
+      return true
+    }
+    toast.error('代理站渠道只能从主站同步，不能手动新增、编辑、启停或删除')
+    return false
+  }
+
   const poolOptions = useMemo(
     () =>
       pools.filter((pool) =>
@@ -680,6 +691,7 @@ export function AdminChannelsPage() {
   }
 
   function openCreate() {
+    if (!ensureChannelWriteAllowed()) return
     setForm(emptyForm)
     setUpstreamPreview(null)
     setUpstreamPreviewOk(false)
@@ -689,6 +701,7 @@ export function AdminChannelsPage() {
   }
 
   function openEdit(row: AdminChannel) {
+    if (!ensureChannelWriteAllowed()) return
     const nextForm = buildFormFromChannel(row)
     setForm(nextForm)
     setUpstreamPreview(null)
@@ -699,6 +712,7 @@ export function AdminChannelsPage() {
   }
 
   function openCopy(row: AdminChannel) {
+    if (!ensureChannelWriteAllowed()) return
     setForm({ ...buildFormFromChannel(row, true), upstream_cost_auto_sync: false })
     setUpstreamPreview(null)
     setUpstreamPreviewOk(false)
@@ -828,6 +842,7 @@ export function AdminChannelsPage() {
   }
 
   async function saveChannel() {
+    if (!ensureChannelWriteAllowed()) return
     setMutError('')
     if (form.upstream_cost_auto_sync && !upstreamAutoSyncReady) {
       toast.error('请先检测成本成功，并同步成本成功后再开启自动同步')
@@ -883,6 +898,7 @@ export function AdminChannelsPage() {
   }
 
   async function toggleChannel(row: AdminChannel) {
+    if (!ensureChannelWriteAllowed()) return
     if (!row.id) return
     setMutError('')
     try {
@@ -908,6 +924,7 @@ export function AdminChannelsPage() {
   }
 
   async function executeDeleteChannel() {
+    if (!ensureChannelWriteAllowed()) return
     if (!pendingDeleteChannel?.id) return
     setMutError('')
     try {
@@ -922,6 +939,7 @@ export function AdminChannelsPage() {
   }
 
   async function batchToggleActive(isActive: boolean) {
+    if (!ensureChannelWriteAllowed()) return
     if (selectedIds.size === 0) return
     setBatchMutating(true)
     setMutError('')
@@ -938,6 +956,7 @@ export function AdminChannelsPage() {
   }
 
   async function batchSetRate() {
+    if (!ensureChannelWriteAllowed()) return
     if (selectedIds.size === 0 || !batchRate.trim()) return
     setBatchMutating(true)
     setMutError('')
@@ -1016,10 +1035,12 @@ export function AdminChannelsPage() {
                 重试
               </Button>
             ) : null}
-            <Button onClick={openCreate}>
-              <PlusIcon data-icon="inline-start" />
-              新增渠道
-            </Button>
+            {!isResellerSite ? (
+              <Button onClick={openCreate}>
+                <PlusIcon data-icon="inline-start" />
+                新增渠道
+              </Button>
+            ) : null}
           </>
         }
       />
@@ -1113,7 +1134,7 @@ export function AdminChannelsPage() {
         </CardContent>
       </Card>
 
-      {selectedIds.size > 0 ? (
+      {!isResellerSite && selectedIds.size > 0 ? (
         <div className="flex items-center gap-3 rounded-lg border bg-muted/40 px-4 py-2.5">
           <span className="text-sm font-medium">已选 {selectedIds.size} 个渠道</span>
           <div className="flex items-center gap-2 ml-2">
@@ -1130,7 +1151,7 @@ export function AdminChannelsPage() {
           <TableHeader>
             <TableRow>
               <TableHead className="w-10">
-                <Checkbox checked={allOnPageSelected} onCheckedChange={toggleSelectAll} aria-label="全选" />
+                <Checkbox checked={!isResellerSite && allOnPageSelected} disabled={isResellerSite} onCheckedChange={toggleSelectAll} aria-label="全选" />
               </TableHead>
               <TableHead className="w-14">ID</TableHead>
               <TableHead>名称</TableHead>
@@ -1162,7 +1183,8 @@ export function AdminChannelsPage() {
                   <TableRow key={row.id ?? index} data-state={row.id != null && selectedIds.has(row.id) ? 'selected' : undefined}>
                     <TableCell>
                       <Checkbox
-                        checked={row.id != null && selectedIds.has(row.id)}
+                        checked={!isResellerSite && row.id != null && selectedIds.has(row.id)}
+                        disabled={isResellerSite}
                         onCheckedChange={() => row.id != null && toggleSelect(row.id)}
                       />
                     </TableCell>
@@ -1216,20 +1238,28 @@ export function AdminChannelsPage() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
-                        <Button size="sm" variant="outline" onClick={() => openEdit(row)}>编辑</Button>
-                        <Button size="sm" variant="outline" onClick={() => openCopy(row)}>
-                          <CopyIcon data-icon="inline-start" />
-                          复制
-                        </Button>
+                        {!isResellerSite ? (
+                          <>
+                            <Button size="sm" variant="outline" onClick={() => openEdit(row)}>编辑</Button>
+                            <Button size="sm" variant="outline" onClick={() => openCopy(row)}>
+                              <CopyIcon data-icon="inline-start" />
+                              复制
+                            </Button>
+                          </>
+                        ) : null}
                         <Button size="sm" variant="outline" onClick={() => setLogChannel(row)}>日志</Button>
                         <Button size="sm" variant="outline" onClick={() => refreshChannelRuntime(row)}>
                           <RefreshCwIcon data-icon="inline-start" />
                           刷新
                         </Button>
-                        <Button size="sm" variant="outline" onClick={() => toggleChannel(row)}>
-                          {row.is_active === false ? '启用' : '停用'}
-                        </Button>
-                        <Button size="sm" onClick={() => setPendingDeleteChannel(row)}>删除</Button>
+                        {!isResellerSite ? (
+                          <>
+                            <Button size="sm" variant="outline" onClick={() => toggleChannel(row)}>
+                              {row.is_active === false ? '启用' : '停用'}
+                            </Button>
+                            <Button size="sm" onClick={() => setPendingDeleteChannel(row)}>删除</Button>
+                          </>
+                        ) : null}
                       </div>
                     </TableCell>
                   </TableRow>

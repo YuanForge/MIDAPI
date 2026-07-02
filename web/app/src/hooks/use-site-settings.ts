@@ -32,6 +32,7 @@ export type SiteSettings = {
   showLowPriceKey: boolean
   userAgreementUrl: string
   userAgreementContent: string
+  appMode: string
 }
 
 const defaultSettings: SiteSettings = {
@@ -56,6 +57,7 @@ const defaultSettings: SiteSettings = {
   showLowPriceKey: true,
   userAgreementUrl: '',
   userAgreementContent: '',
+  appMode: 'master',
 }
 
 export function useSiteSettings() {
@@ -95,6 +97,7 @@ export function useSiteSettings() {
           showLowPriceKey: record.show_low_price_key !== 'false',
           userAgreementUrl: record.user_agreement_url || '',
           userAgreementContent: record.user_agreement_content || '',
+          appMode: record.app_mode || 'master',
         })
       } catch {
         setSettings(defaultSettings)

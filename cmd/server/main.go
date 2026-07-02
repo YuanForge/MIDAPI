@@ -36,7 +36,7 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 
-	if err := db.Init(&cfg.DB, true); err != nil {
+	if err := db.Init(&cfg.DB, true, cfg.App.Mode); err != nil {
 		log.Fatalf("db: %v", err)
 	}
 	log.Println("db connected")
@@ -45,6 +45,15 @@ func main() {
 		log.Fatalf("redis: %v", err)
 	}
 	log.Println("redis connected")
+
+	if service.IsResellerSiteMode(cfg) {
+		result, syncErr := service.SyncResellerPlatformChannels(context.Background(), cfg)
+		if syncErr != nil {
+			log.Printf("[reseller-sync] initial channel sync failed: %v", syncErr)
+		} else {
+			log.Printf("[reseller-sync] initial channel sync ok: upserted=%d disabled=%d", result.Upserted, result.Disabled)
+		}
+	}
 
 	// 启动时清除渠道缓存，确保 poller/worker 使用 DB 中最新的脚本和配置
 	if keys, err := cache.Client.Keys(context.Background(), "channel:*").Result(); err == nil && len(keys) > 0 {
@@ -78,12 +87,18 @@ func main() {
 	taskresult.StartPoller(ctx)
 
 	// 启动上游余额自动同步与低余额告警（每 10 秒）
-	handler.StartUpstreamBalanceMonitor(ctx)
-	handler.StartUpstreamCostMonitor(ctx)
+	if service.IsResellerSiteMode(cfg) {
+		service.StartResellerPlatformChannelSyncer(ctx, cfg)
+	} else {
+		handler.StartUpstreamBalanceMonitor(ctx)
+		handler.StartUpstreamCostMonitor(ctx)
+	}
 
 	// 启动 OCPC 定时上报调度器
 	service.StartOcpcScheduler(ctx)
-	service.StartPendingResellerSiteBuildJobs(ctx, cfg)
+	if !service.IsResellerSiteMode(cfg) {
+		service.StartPendingResellerSiteBuildJobs(ctx, cfg)
+	}
 
 	m := mailer.New(&cfg.SMTP)
 	authH := handler.NewAuthHandler(&cfg.Server, m)

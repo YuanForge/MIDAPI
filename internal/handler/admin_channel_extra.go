@@ -13,6 +13,9 @@ import (
 
 // POST /admin/channels/batch  批量启停 / 批量倍率
 func BatchUpdateChannels(c *gin.Context) {
+	if abortIfResellerSiteChannelWrite(c) {
+		return
+	}
 	var req struct {
 		Action    string  `json:"action"` // toggle_active / set_rate
 		IDs       []int64 `json:"ids"`

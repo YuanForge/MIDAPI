@@ -531,6 +531,9 @@ func CreateUpstreamAPIKey(c *gin.Context) {
 
 // POST /admin/channels/batch-from-upstream
 func BatchCreateChannelsFromUpstream(c *gin.Context) {
+	if abortIfResellerSiteChannelWrite(c) {
+		return
+	}
 	var req struct {
 		PlatformID int64    `json:"platform_id"`
 		Models     []string `json:"models"`
@@ -570,6 +573,9 @@ func BatchCreateChannelsFromUpstream(c *gin.Context) {
 
 // POST /admin/upstream-platforms/:id/sync-channels
 func SyncUpstreamPlatformChannels(c *gin.Context) {
+	if abortIfResellerSiteChannelWrite(c) {
+		return
+	}
 	p, ok := loadUpstreamPlatform(c)
 	if !ok {
 		return
@@ -633,6 +639,9 @@ func PreviewUpstreamPlatformChannelBindings(c *gin.Context) {
 
 // POST /admin/upstream-platforms/:id/bind-channels
 func BindUpstreamPlatformChannels(c *gin.Context) {
+	if abortIfResellerSiteChannelWrite(c) {
+		return
+	}
 	p, ok := loadUpstreamPlatform(c)
 	if !ok {
 		return
@@ -667,6 +676,9 @@ func BindUpstreamPlatformChannels(c *gin.Context) {
 
 // GET /admin/channels/:id/upstream-cost
 func PreviewChannelUpstreamCost(c *gin.Context) {
+	if abortIfResellerSiteChannelWrite(c) {
+		return
+	}
 	ch, ok := loadAdminChannel(c)
 	if !ok {
 		return
@@ -692,6 +704,9 @@ func PreviewChannelUpstreamCost(c *gin.Context) {
 
 // POST /admin/channels/:id/sync-upstream-cost
 func SyncChannelUpstreamCost(c *gin.Context) {
+	if abortIfResellerSiteChannelWrite(c) {
+		return
+	}
 	ch, ok := loadAdminChannel(c)
 	if !ok {
 		return

@@ -291,8 +291,10 @@ func resellerBillingFieldHidden(key string) bool {
 	}
 	return strings.HasPrefix(k, "cost_") ||
 		strings.HasPrefix(k, "upstream_") ||
+		strings.Contains(k, "_cost") ||
 		strings.Contains(k, "_cost_") ||
 		strings.HasSuffix(k, "_cost") ||
+		strings.HasSuffix(k, "_costs") ||
 		strings.Contains(k, "auto_sync") ||
 		strings.Contains(k, "secret") ||
 		strings.Contains(k, "api_key")

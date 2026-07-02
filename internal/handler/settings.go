@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 
+	"fanapi/internal/config"
 	"fanapi/internal/db"
 	"fanapi/internal/model"
 
@@ -47,6 +48,9 @@ func GetSettings(c *gin.Context) {
 	result := make(map[string]string, len(settings))
 	for _, s := range settings {
 		result[s.Key] = s.Value
+	}
+	if cfg := configFromContext(c); cfg != nil {
+		result["app_mode"] = cfg.App.Mode
 	}
 	c.JSON(http.StatusOK, gin.H{"settings": result})
 }
@@ -94,7 +98,22 @@ func GetPublicSettings(c *gin.Context) {
 			result[s.Key] = s.Value
 		}
 	}
+	if cfg := configFromContext(c); cfg != nil {
+		result["app_mode"] = cfg.App.Mode
+	}
 	c.JSON(http.StatusOK, gin.H{"settings": result})
+}
+
+func configFromContext(c *gin.Context) *config.Config {
+	raw, ok := c.Get("app_config")
+	if !ok {
+		return nil
+	}
+	cfg, ok := raw.(*config.Config)
+	if !ok {
+		return nil
+	}
+	return cfg
 }
 
 // AdminVerifyPassword verifies the current admin's password for sensitive operations.

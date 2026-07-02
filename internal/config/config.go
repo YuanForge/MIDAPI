@@ -11,6 +11,7 @@ type Config struct {
 	SMTP            SMTPConfig            `mapstructure:"smtp"`
 	Worker          WorkerConfig          `mapstructure:"worker"`
 	PlatformAPI     PlatformAPIConfig     `mapstructure:"platform_api"`
+	ResellerSite    ResellerSiteConfig    `mapstructure:"reseller_site"`
 	ResellerBuilder ResellerBuilderConfig `mapstructure:"reseller_builder"`
 }
 
@@ -78,6 +79,13 @@ type PlatformAPIConfig struct {
 	BaseURL          string `mapstructure:"base_url"`
 	Key              string `mapstructure:"key"`
 	PriceSyncEnabled bool   `mapstructure:"price_sync_enabled"`
+}
+
+type ResellerSiteConfig struct {
+	SiteCode    string  `mapstructure:"site_code"`
+	SiteName    string  `mapstructure:"site_name"`
+	LogoURL     string  `mapstructure:"logo_url"`
+	ProfitRatio float64 `mapstructure:"profit_ratio"`
 }
 
 type ResellerBuilderConfig struct {
